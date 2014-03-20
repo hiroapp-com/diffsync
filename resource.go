@@ -1,15 +1,15 @@
 package diffsync
 
 import (
-    "fmt" 
-    "encoding/json"
+	"encoding/json"
+	"fmt"
 )
 
 // this means, shadows and doc-stores can now work with this defined object
 type ResourceValue interface {
 	ApplyDelta(Delta) (Patch, error)
 	GetDelta(ResourceValue) (Delta, error)
-    ApplyPatch(Patch, chan<- Event) (bool, error) 
+	ApplyPatch(Patch, chan<- Event) (bool, error)
 	json.Marshaler
 	json.Unmarshaler
 }
@@ -25,5 +25,5 @@ func (res *Resource) CloneEmpty() *Resource {
 }
 
 func (res *Resource) StringId() string {
-    return fmt.Sprintf("%s:%s", res.kind, res.id)
+	return fmt.Sprintf("%s:%s", res.kind, res.id)
 }

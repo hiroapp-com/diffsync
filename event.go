@@ -14,8 +14,8 @@ type ResLoadData struct {
 }
 
 type SyncData struct {
-    res Resource 
-    changes []Edit
+	res     Resource
+	changes []Edit
 }
 
 func NewResLoadEvent(res *Resource) (Event, chan struct{}) {
@@ -27,4 +27,3 @@ func NewResLoadEvent(res *Resource) (Event, chan struct{}) {
 	done := make(chan struct{})
 	return Event{name: "res-load", data: ResLoadData{res, done}}, done
 }
-
