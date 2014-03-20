@@ -12,11 +12,12 @@ var (
 
 type Session struct {
     id string
+    taglib map[string]string
     acl Auther
     tainted ResourceRegistry
     reset ResourceRegistry
     client chan<- Event
-    shadows map[string]Shadow 
+    shadows map[string]*Shadow 
 }
 
 func (sess *Session) Handle(event Event) {
@@ -48,10 +49,71 @@ func (sess *Session) handle_ehlo(event Event) {
     return
 }
 
+func (sess *Session) push_client(event Event) bool {
+    select {
+        case sess.client <- event:
+            return true
+        default:
+    }
+    return false
+}
 
 func (sess *Session) handle_sync(event Event) {
-    // get shadow for sync and use it for diffsync
-    // flow (incl version checking etc)
+    // this can assume a weak promise that a client is currently connected 
+    // because res-sync *only* arrive on a client-request
+    // still one *cannot* expect to have a receiving client (just in the middle 
+    // of the sync the client might have disconnected). hence, don't forget to 
+    // cover that edge-case
+    data, ok := event.data.(SyncData) 
+    if !ok {
+        // eeeek, log and or respond that data was malformed
+        // for now just discard
+        return 
+    }
+    // todo(ACL) check if session may access data.res
+    // note: we do not check the event-tag here, because the server will 
+    // always ablige to a res-sync event, whether it's a response of a cycle
+    // or an initiation. If the client initiates a res-sync simultaneously, 
+    // the server will *not* ignore the incoming request on the fact that the 
+    // taglib indicates a pending tag. It will ignore the tag (and its own 
+    // cycle) and process like a regular client-side-sync(css). (don't forget to 
+    // update taglib in the end
+    shadow := sess.shadows[data.res.StringId()]
+    for _, edit := range data.changes {
+        changed, err := shadow.SyncIncoming(edit)
+        log.Println(changed, err) //todo error handling! do we need 'changed' here?
+    }
+    // cleanup tag
+    defer delete(sess.taglib, data.res.StringId())
+    // check event-tag
+    if mytag, ok := sess.taglib[data.res.StringId()]; ok && mytag == event.tag {
+        //received a response to a server-side-sync(sss) cycle
+        // we're all done!
+        // note this relies on the fact that during sync-incoming, appropriate
+        // res-taint events have been sent to nofity and we don't have to care 
+        // about change-propagation anymore at this point and can leave 
+        return
+    }
+    // Preparing and sending out the changes for the response to the css
+
+    // calculate changes and add them to pending and incease our SV
+    shadow.UpdatePending()
+    data.changes = shadow.pending
+    event.data = data
+    if !sess.push_client(event) {
+        // edge-case happened: client sent request and disconnected before we 
+        // could response. set tainted state for resource. 
+        sess.tainted.Add(&data.res)
+    }
+    // note: the following should probably already happen at the resource
+    // store layer (i.e. sending taint packets with patch.origin_sid as event.sid
+    // property.
+    // now tell the notifier, that the resource was tainted along
+    // with this sessionid as the origin value in the res-taint event
+    // this means, the current session will not receive the event (being
+    // the origin), but we already updated the tainted registry above
+    // on the next client-message the change will be flushed
+    notify <- Event{name: "res-taint", sid: sess.id, data: data.res.CloneEmpty()}
     return
 }
 
