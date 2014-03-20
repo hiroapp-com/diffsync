@@ -23,7 +23,9 @@ func (note *NoteValue) ApplyDelta(delta Delta)  (Patch, error) {
     patch := dmp.PatchMake(original, diffs)
     *note = NoteValue(dmp.DiffText2(diffs))
     if original == string(*note) {
-        return Patch{}, nil
+        // nil-value indicates that no changes happened 
+        // todo doc this behaviour nearby Patch definition
+        return Patch{val: nil}, nil
     }
     return Patch{val: patch}, nil
 }
