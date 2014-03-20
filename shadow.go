@@ -15,14 +15,11 @@ func (shadow *Shadow) Rollback() {
     shadow.pending = []Edit{}
 }
 
-func (shadow *Shadow) UpdatePending(store chan<- Event) error {
+func (shadow *Shadow) UpdatePending() error {
     //send "res-load" to store
     res := shadow.res.CloneEmpty()
-    // this re
-    event, done := NewResLoadEvent(res)
-    store <- event
-    // after we receive done, our 'res' has been modified inplace
-    <- done
+    // noteStore needs to be abstracted away to abstract ResourceStore
+    _ = noteStore.Load(res)
     delta, err := shadow.res.GetDelta(res.ResourceValue)
     if err != nil {
         return err
@@ -32,7 +29,7 @@ func (shadow *Shadow) UpdatePending(store chan<- Event) error {
     return nil
 }
 
-func (shadow *Shadow) SyncIncoming(edit Edit, res_store chan<- Event) (changed bool, err error){
+func (shadow *Shadow) SyncIncoming(edit Edit) (changed bool, err error){
     // Make sure clocks are in sync or recoverable
     if err := shadow.SyncSvWith(edit, shadow); err != nil {
         return false, err
@@ -48,17 +45,19 @@ func (shadow *Shadow) SyncIncoming(edit Edit, res_store chan<- Event) (changed b
     } else if err != nil {
         return false, err
     }
-    fake_notify := make(chan Event)
-    patch, err := shadow.res.ApplyDelta(edit.delta, fake_notify)
+    patch, err := shadow.res.ApplyDelta(edit.delta)
     shadow.backup = shadow.res.ResourceValue
     if err != nil {
         return false, err
     }
     shadow.IncCv()
-    if patch == nil {
+    if patch.val == nil {
         // no changes, we're finished
         return false, nil
     }
     // TODO send res-patch down to res_store
+//    newres = {kind: "note", id
+    noteStore.Patch(&(*shadow).res, patch)
+     
     return true, nil
 }
