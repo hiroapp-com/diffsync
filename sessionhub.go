@@ -25,10 +25,6 @@ func (hub *SessionHub) route(sid string, event Event) error {
     inbox, ok := hub.active[sid]
     if !ok {
         // if not already running, load from datastore and spawn runner
-        session, err := hub.store.Get(sid)
-        if err != nil {
-            return err 
-        }
         newinbox := make(chan Event, 32)
         // session will run until 
         go func() {
@@ -36,11 +32,24 @@ func (hub *SessionHub) route(sid string, event Event) error {
                 //signal shuwdown of runner to hub
                 hub.runner_done <-  sid
             }(sid)
-            log.Println(sid, "spawning up new inbox")
+            log.Println(sid, "spawning up new inbox runner")
+            session, err := hub.store.Get(sid)
+            if err != nil {
+                // in that case a stupid race-condition might occure: if the runner 
+                // aborts before routing the event to the runners-inbox, the write will
+                // block and the route() call hang. 
+                // we work around this by using a buffered channel, thus the initial 
+                // event-send whithin this routine will always return
+                // If this race-condition hits, we will lose this packet to nirvana
+                // (channel gets closed and gc'd when routine reports it shuts down to 
+                // hub
+                log.Println(sid, "Cannot fetch Session from sessionstore. aborting runner.")
+                return 
+            }
             for  event := range newinbox {
                 session.Handle(event)
             }
-            log.Println(sid, "shutting down inbox")
+            log.Println(sid, "shutting down inbox runner")
         }()
         hub.active[sid] = newinbox
         inbox = newinbox
