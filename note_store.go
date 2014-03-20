@@ -15,14 +15,6 @@ var (
     noteStore = &NoteStore{notes: map[string]NoteValue{}}
 )
 
-type ResourceStore interface {
-    LoadInto(*Resource) error
-    PatchInto(*Resource, Patch) error
-    Put(*Resource) error
-    Delete(*Resource) error
-}
-
-
 type NoteStore struct {
     notes map[string]NoteValue
     sync.RWMutex
