@@ -28,3 +28,27 @@ func (res *Resource) CloneEmpty() *Resource {
 func (res *Resource) StringId() string {
 	return fmt.Sprintf("%s:%s", res.kind, res.id)
 }
+
+func (res *Resource) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
+		"kind": res.kind,
+		"id":   res.id,
+		"val":  res.ResourceValue,
+	})
+}
+
+func (res *Resource) UnmarshalJSON(from []byte) error {
+	vals := make(map[string]interface{})
+	json.Unmarshal(from, vals)
+	*res = Resource{
+		kind: vals["kind"].(string),
+		id:   vals["id"].(string),
+	}
+	switch resval := vals["val"].(type) {
+	case *NoteValue:
+	case *MetaValue:
+		res.ResourceValue = resval
+	default:
+	}
+	return nil
+}
