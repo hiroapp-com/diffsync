@@ -1,6 +1,7 @@
 package diffsync
 
 import (
+	"encoding/json"
 	"log"
 )
 
@@ -10,12 +11,32 @@ var (
 
 type Session struct {
 	id      string
+	uid     string
 	taglib  map[string]string
-	acl     Auther
 	tainted ResourceRegistry
 	reset   ResourceRegistry
 	client  chan<- Event
 	shadows map[string]*Shadow
+}
+
+func sid_generate() string {
+	return "fooo"
+}
+
+func NewSession(uid string, resources []Resource) *Session {
+	shadows := make(map[string]*Shadow)
+	for _, res := range resources {
+		shadows[res.StringId()] = NewShadow(res)
+	}
+	return &Session{
+		id:      sid_generate(),
+		uid:     uid,
+		taglib:  make(map[string]string),
+		tainted: make(ResourceRegistry),
+		reset:   make(ResourceRegistry),
+		client:  nil,
+		shadows: shadows,
+	}
 }
 
 func (sess *Session) Handle(event Event) {
@@ -133,4 +154,28 @@ func (sess *Session) handle_reset(event Event) {
 	//    event.tag = taglib.NewTag(state)
 	//}
 	// check other tagging stuff
+}
+
+func (s *Session) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
+		"id":      s.id,
+		"uid":     s.uid,
+		"taglib":  s.taglib,
+		"tainted": s.tainted,
+		"reset":   s.reset,
+		"shadows": s.shadows,
+	})
+}
+
+func (session *Session) UnmarshalJSON(from []byte) error {
+	vals := make(map[string]interface{})
+	json.Unmarshal(from, vals)
+	*session = Session{id: vals["id"].(string),
+		uid:     vals["uid"].(string),
+		taglib:  vals["taglib"].(map[string]string),
+		tainted: vals["tainted"].(ResourceRegistry),
+		reset:   vals["reset"].(ResourceRegistry),
+		shadows: vals["shadows"].(map[string]*Shadow),
+	}
+	return nil
 }
