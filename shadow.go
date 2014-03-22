@@ -1,12 +1,23 @@
 package diffsync
 
-import ()
+import (
+	"encoding/json"
+)
 
 type Shadow struct {
 	res     Resource
 	backup  ResourceValue
 	pending []Edit
 	SessionClock
+}
+
+func NewShadow(res Resource) *Shadow {
+	return &Shadow{
+		res:          res,
+		backup:       res.CloneValue(),
+		pending:      []Edit{},
+		SessionClock: SessionClock{},
+	}
 }
 
 func (shadow *Shadow) Rollback() {
@@ -59,4 +70,25 @@ func (shadow *Shadow) SyncIncoming(edit Edit) (changed bool, err error) {
 	noteStore.Patch(&(*shadow).res, patch)
 
 	return true, nil
+}
+
+func (s *Shadow) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
+		"res":     s.res,
+		"backup":  s.backup,
+		"pending": s.pending,
+		"clock":   s.SessionClock,
+	})
+}
+
+func (shadow *Shadow) UnmarshalJSON(from []byte) error {
+	vals := make(map[string]interface{})
+	json.Unmarshal(from, vals)
+	*shadow = Shadow{
+		res:          vals["res"].(Resource),
+		backup:       vals["backup"].(ResourceValue),
+		pending:      vals["pending"].([]Edit),
+		SessionClock: vals["clock"].(SessionClock),
+	}
+	return nil
 }
