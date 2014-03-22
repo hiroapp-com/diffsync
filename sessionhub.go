@@ -4,12 +4,6 @@ import (
 	"log"
 )
 
-type SessionStore interface {
-	Get(string) (*Session, error)
-	Create(string) (*Session, error)
-	Kill(string) error
-}
-
 type SessionHub struct {
 	inbox       chan Event
 	runner_done chan string
