@@ -86,7 +86,7 @@ func (clock *SessionClock) MarshalJSON() ([]byte, error) {
 func (clock *SessionClock) UnmarshalJSON(from []byte) error {
 	vals := make(map[string]int64)
 	json.Unmarshal(from, vals)
-	*session = SessionClock{cv: vals["cv"],
+	*clock = SessionClock{cv: vals["cv"],
 		sv: vals["sv"],
 		bv: vals["bv"],
 	}
