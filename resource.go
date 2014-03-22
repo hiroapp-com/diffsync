@@ -10,6 +10,7 @@ type ResourceValue interface {
 	ApplyDelta(Delta) (Patch, error)
 	GetDelta(ResourceValue) (Delta, error)
 	ApplyPatch(Patch, chan<- Event) (bool, error)
+	CloneValue() ResourceValue
 	json.Marshaler
 	json.Unmarshaler
 }

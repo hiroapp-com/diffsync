@@ -6,8 +6,13 @@ import (
 
 type NoteValue string
 
-func NewNoteValue(text string) NoteValue {
-	return NoteValue("")
+func NewNoteValue(text string) *NoteValue {
+	nv := NoteValue("")
+	return &nv
+}
+
+func (note *NoteValue) CloneValue() ResourceValue {
+    return NewNoteValue(string(*note))
 }
 
 //note maybe make notify a global chan
