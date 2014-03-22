@@ -1,6 +1,7 @@
 package diffsync
 
 import (
+	"encoding/json"
 	"fmt"
 )
 
@@ -72,4 +73,22 @@ func (clock SessionClock) CheckCV(other Versioned) (is_dupe bool, err error) {
 		return false, VersionsDivergedError{clock, other}
 	}
 	return false, nil
+}
+
+func (clock *SessionClock) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]int64{
+		"cv": clock.cv,
+		"sv": clock.sv,
+		"bv": clock.bv,
+	})
+}
+
+func (clock *SessionClock) UnmarshalJSON(from []byte) error {
+	vals := make(map[string]int64)
+	json.Unmarshal(from, vals)
+	*session = SessionClock{cv: vals["cv"],
+		sv: vals["sv"],
+		bv: vals["bv"],
+	}
+	return nil
 }
