@@ -1,6 +1,12 @@
 package diffsync
 
-type Delta interface{}
+import (
+	"encoding/json"
+)
+
+type Delta interface {
+	json.Marshaler
+}
 
 type Patch struct {
 	origin_sid string
