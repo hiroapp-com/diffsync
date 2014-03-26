@@ -1,113 +1,95 @@
 package diffsync
 
 import (
-	"encoding/json"
 	"fmt"
+	"log"
+	"sync"
 )
 
-type StoreBackend interface {
-	Create(string, json.Marshaler) error
-	Update(string, json.Marshaler) error
-	Get(string, json.Unmarshaler) error
-	Delete(string) error
-}
-type SessionStore interface {
+const (
+	SESSION_NOTEXIST = iota
+	SESSION_EXPIRED
+	SESSION_REVOKED
+)
+
+type SessionBackend interface {
 	Get(string) (*Session, error)
-	Consume(string, string) (string, error)
-	Kill(sid string) error
-	Token(string) (*Token, error)
+	//Create(*Session) error
+	Save(*Session) error
+	Delete(string) error
+	Release(*Session)
 }
 
-type HiroSessions struct {
-	backend StoreBackend
+type InvalidSessionId struct {
+	sid    string
+	reason int
 }
 
-func (store *HiroSessions) Get(sid string) (*Session, error) {
+func (err InvalidSessionId) Error() string {
+	return fmt.Sprintf("invalid session-id %v", err)
+}
+
+type HiroMemSessions struct {
+	db       map[string]*Session
+	sessbuff chan *Session
+	stores   map[string]*Store
+	sync.RWMutex
+}
+
+func NewHiroMemSessions(stores map[string]*Store) *HiroMemSessions {
+	return &HiroMemSessions{
+		db:       make(map[string]*Session),
+		sessbuff: make(chan *Session, 256),
+		stores:   stores,
+	}
+}
+
+func (mem *HiroMemSessions) allocate_session() *Session {
+	var sess *Session
+	select {
+	case sess = <-mem.sessbuff:
+		log.Printf("Reusing session-pointer: %v", sess)
+	default:
+		sess = new(Session)
+	}
+	return sess
+}
+
+func (mem *HiroMemSessions) Get(sid string) (*Session, error) {
+	// the
 	//note: leaky bucket would be nice for buffer-reuse
-	session := Session{}
-	if err := store.backend.Get(sid, &session); err != nil {
-		return nil, err
-	}
-	return &session, nil
-}
-
-type TokenDoesNotexistError string
-
-func (err TokenDoesNotexistError) Error() string {
-	return fmt.Sprintf("token `%s` does not exist")
-}
-func (store *HiroSessions) Token(key string) (*Token, error) {
-	token, ok := tmpTokens[key]
+	mem.RLock()
+	defer mem.RUnlock()
+	var ok bool
+	session := mem.allocate_session()
+	session, ok = mem.db[sid]
 	if !ok {
-		return nil, TokenDoesNotexistError(key)
+		mem.Release(session)
+		return nil, InvalidSessionId{sid, SESSION_NOTEXIST}
 	}
-	return &token, nil
+	return session, nil
 }
 
-func (store *HiroSessions) Consume(token_key string, sid string) (string, error) {
-	token, err := store.Token(token_key)
-	if err != nil {
-		return "", err
-	}
-	var session *Session
-	if sid != "" {
-		session, err = store.Get(sid)
-		if err != nil {
-			// todo check if session has expired or anyhing
-			// maybe we want to proceed normaly with token
-			// even if provided session is dead for some reason
-			return "", err
-		}
-	}
-	if session != nil {
-		// if existing session, merge resources from token into session
-		// and do some other magic
-		// todo
-		return session.id, nil
-	}
-	// create session
-	session = NewSession(token.userid, token.resources)
-	err = store.backend.Create(session.id, session)
-	if err != nil {
-		//whyever that would happen
-		return "", err
-	}
-	// session created, return new sid and leave consume()
-	return sid, nil
+func (mem *HiroMemSessions) Save(session *Session) error {
+	// is an upsert, needs doc
+	mem.Lock()
+	defer mem.Unlock()
+	log.Printf("saving session `%s`, %v", session.id, *session)
+	stored := *session
+	mem.db[session.id] = &stored
+	return nil
 }
 
-type Token struct {
-	value     string
-	userid    string
-	resources []Resource
+func (mem *HiroMemSessions) Delete(sid string) error {
+	mem.Lock()
+	defer mem.Unlock()
+	delete(mem.db, sid)
+	return nil
 }
 
-//tmpNotes := map[string]NoteValue{
-//    "ak8Sk": NoteValue("HEEYEAAAA WELCOME TO TEH INVITES"),
-//
-//}
-
-var tmpTokens = map[string]Token{
-	"anon": {
-		value:  "anon",
-		userid: "",
-		resources: []Resource{
-			Resource{kind: "note", id: "ak8Sk", ResourceValue: NewNoteValue("HEEYEAAAA WELCOME TO TEH INVITES")},
-			Resource{kind: "meta", id: "ak8Sk", ResourceValue: &MetaValue{}},
-		},
-	},
-	"userlogin": {
-		value:  "userlogin",
-		userid: "sk80Ms",
-		resources: []Resource{
-			//Resource{kind: "folio", id:"sk80Ms", ResourceValue: FolioValue{} },
-			//Resource{kind: "contacts", id:"sk80Ms", ResourceValue: ContactsValue{} },
-			Resource{kind: "note", id: "ak8Sk", ResourceValue: NewNoteValue("HEEYEAAAA WELCOME TO TEH INVITES")},
-			Resource{kind: "note", id: "9sl9i", ResourceValue: NewNoteValue("apples, bananas, kiwis, ginger")},
-			Resource{kind: "note", id: "Hlq8l", ResourceValue: NewNoteValue("Tooodoooo")},
-			Resource{kind: "meta", id: "ak8Sk", ResourceValue: &MetaValue{title: "shared fun"}},
-			Resource{kind: "meta", id: "9sl9i", ResourceValue: &MetaValue{title: "grocery list"}},
-			Resource{kind: "meta", id: "Hlq8l", ResourceValue: &MetaValue{title: "todos"}},
-		},
-	},
+func (mem *HiroMemSessions) Release(sess *Session) {
+	select {
+	case mem.sessbuff <- sess:
+	default:
+	}
 }
