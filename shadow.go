@@ -2,6 +2,7 @@ package diffsync
 
 import (
 	"encoding/json"
+	"log"
 )
 
 type Shadow struct {
@@ -25,11 +26,11 @@ func (shadow *Shadow) Rollback() {
 	shadow.pending = []Edit{}
 }
 
-func (shadow *Shadow) UpdatePending() error {
+func (shadow *Shadow) UpdatePending(store *Store) error {
 	//send "res-load" to store
 	res := shadow.res.CloneEmpty()
-	// noteStore needs to be abstracted away to abstract ResourceStore
-	_ = noteStore.Load(res)
+	// noteStore needs to be abstracted away to abstract Store
+	_ = store.Load(&res)
 	delta, err := shadow.res.GetDelta(res.ResourceValue)
 	if err != nil {
 		return err
@@ -39,9 +40,11 @@ func (shadow *Shadow) UpdatePending() error {
 	return nil
 }
 
-func (shadow *Shadow) SyncIncoming(edit Edit) (changed bool, err error) {
+func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err error) {
 	// Make sure clocks are in sync or recoverable
-	if err := shadow.SyncSvWith(edit, shadow); err != nil {
+	log.Println(edit)
+	log.Println(shadow)
+	if err := shadow.SessionClock.SyncSvWith(edit, shadow); err != nil {
 		return false, err
 	}
 	pending := make([]Edit, len(shadow.pending))
@@ -53,6 +56,7 @@ func (shadow *Shadow) SyncIncoming(edit Edit) (changed bool, err error) {
 	if dupe, err := shadow.CheckCV(edit); dupe {
 		return false, nil
 	} else if err != nil {
+		log.Printf("err sync cv")
 		return false, err
 	}
 	patch, err := shadow.res.ApplyDelta(edit.delta)
@@ -67,9 +71,7 @@ func (shadow *Shadow) SyncIncoming(edit Edit) (changed bool, err error) {
 	}
 	// TODO send res-patch down to res_store
 	//    newres = {kind: "note", id
-	noteStore.Patch(&(*shadow).res, patch)
-
-	return true, nil
+	return true, store.Patch(&(*shadow).res, patch)
 }
 
 func (s *Shadow) MarshalJSON() ([]byte, error) {
