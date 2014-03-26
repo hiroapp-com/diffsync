@@ -75,7 +75,7 @@ func (clock SessionClock) CheckCV(other Versioned) (is_dupe bool, err error) {
 	return false, nil
 }
 
-func (clock *SessionClock) MarshalJSON() ([]byte, error) {
+func (clock SessionClock) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]int64{
 		"cv": clock.cv,
 		"sv": clock.sv,
