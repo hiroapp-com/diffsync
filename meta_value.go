@@ -24,12 +24,16 @@ func (note *MetaValue) ApplyPatch(patch Patch, notify chan<- Event) (changed boo
 }
 
 func (note *MetaValue) GetDelta(other ResourceValue) (Delta, error) {
-	return "", errors.New("Not implemented")
+	return NewNoteValue(""), errors.New("Not implemented")
 }
 
 func (note *MetaValue) MarshalJSON() ([]byte, error) {
-	return []byte{}, errors.New("Not implemented")
+	return []byte{}, nil
 
+}
+
+func (meta *MetaValue) String() string {
+	return ""
 }
 
 func (note *MetaValue) UnmarshalJSON(from []byte) error {
