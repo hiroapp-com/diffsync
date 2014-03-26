@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// A valid ResourceValue that can be used to indicate a nil value 
-// If a Resource's ResourceValue is of type NilValue, it can only 
+// A valid ResourceValue that can be used to indicate a nil value
+// If a Resource's ResourceValue is of type NilValue, it can only
 // be used as a "reference" object.
 type NilValue struct{}
 
