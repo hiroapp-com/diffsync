@@ -8,7 +8,8 @@ import (
 )
 
 var (
-	_ = log.Print
+	dmp = DMP.New()
+	_   = log.Print
 )
 
 type NoteValue string
