@@ -1,24 +1,32 @@
 package diffsync
 
 import (
+	"encoding/json"
+	"fmt"
 	DMP "github.com/sergi/go-diff/diffmatchpatch"
+	"log"
+)
+
+var (
+	_ = log.Print
 )
 
 type NoteValue string
+type NoteDelta string
 
 func NewNoteValue(text string) *NoteValue {
-	nv := NoteValue("")
+	nv := NoteValue(text)
 	return &nv
 }
 
 func (note *NoteValue) CloneValue() ResourceValue {
-    return NewNoteValue(string(*note))
+	return NewNoteValue(string(*note))
 }
 
 //note maybe make notify a global chan
 func (note *NoteValue) ApplyDelta(delta Delta) (Patch, error) {
 	original := string(*note)
-	diffs, err := dmp.DiffFromDelta(original, delta.(string))
+	diffs, err := dmp.DiffFromDelta(original, string(delta.(NoteDelta)))
 	if err != nil {
 		return Patch{}, err
 	}
@@ -29,7 +37,7 @@ func (note *NoteValue) ApplyDelta(delta Delta) (Patch, error) {
 		// todo doc this behaviour nearby Patch definition
 		return Patch{val: nil}, nil
 	}
-	return Patch{val: patch}, nil
+	return Patch{val: patch[0]}, nil
 }
 
 // maybe notify should be a global chan
@@ -41,15 +49,33 @@ func (note *NoteValue) ApplyPatch(patch Patch, notify chan<- Event) (changed boo
 	return changed, nil
 }
 
-func (note *NoteValue) GetDelta(other ResourceValue) (Delta, error) {
-	return "", nil
+func (note *NoteValue) GetDelta(latest ResourceValue) (Delta, error) {
+	master, ok := latest.(*NoteValue)
+	if !ok {
+		return nil, fmt.Errorf("received illegal master-value for delta calculation")
+	}
+	diffs := dmp.DiffMain(string(*note), string(*master), false)
+	diffs = dmp.DiffCleanupEfficiency(diffs)
+	return NoteDelta(dmp.DiffToDelta(diffs)), nil
+}
+
+func (note *NoteValue) String() string {
+	return string(*note)
+}
+
+func (delta NoteDelta) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(delta))
 }
 
 func (note *NoteValue) MarshalJSON() ([]byte, error) {
-	return []byte(*note), nil
+	return json.Marshal(string(*note))
 }
 
 func (note *NoteValue) UnmarshalJSON(from []byte) error {
-	*note = NoteValue(from)
+	var s string
+	if err := json.Unmarshal(from, &s); err != nil {
+		return err
+	}
+	*note = NoteValue(s)
 	return nil
 }
