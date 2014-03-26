@@ -1,6 +1,8 @@
 package diffsync
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 )
@@ -17,17 +19,21 @@ type Session struct {
 	reset   ResourceRegistry
 	client  chan<- Event
 	shadows map[string]*Shadow
+	stores  map[string]*Store
 }
 
 func sid_generate() string {
-	return "fooo"
+	uuid := make([]byte, 16)
+	if n, err := rand.Read(uuid); err != nil || n != len(uuid) {
+		panic(err)
+	}
+	// RFC 4122
+	uuid[8] = 0x80 // variant bits
+	uuid[4] = 0x40 // v4
+	return hex.EncodeToString(uuid)
 }
 
-func NewSession(uid string, resources []Resource) *Session {
-	shadows := make(map[string]*Shadow)
-	for _, res := range resources {
-		shadows[res.StringId()] = NewShadow(res)
-	}
+func NewSession(uid string) *Session {
 	return &Session{
 		id:      sid_generate(),
 		uid:     uid,
@@ -35,12 +41,26 @@ func NewSession(uid string, resources []Resource) *Session {
 		tainted: make(ResourceRegistry),
 		reset:   make(ResourceRegistry),
 		client:  nil,
-		shadows: shadows,
+		shadows: make(map[string]*Shadow),
 	}
 }
 
+func (sess *Session) diff_resources(check []Resource) []Resource {
+	news := make([]Resource, 0, len(check))
+	for _, res := range check {
+		if _, exists := sess.shadows[res.StringID()]; !exists {
+			news = append(news, res)
+		}
+	}
+	return news
+}
 func (sess *Session) Handle(event Event) {
+	if event.client != nil {
+		sess.client = event.client
+	}
 	switch event.name {
+	case "session-create":
+		sess.handle_session_create(event)
 	case "res-taint":
 		sess.handle_taint(event)
 	case "shadow-reset":
@@ -52,6 +72,13 @@ func (sess *Session) Handle(event Event) {
 	default:
 		sess.handle_notimplemented(event)
 	}
+}
+
+func (sess *Session) handle_session_create(event Event) {
+	log.Printf("pushing event %v", event)
+	event.data = SessionData{"", sess}
+	log.Printf("changed event %v", event)
+	sess.push_client(event)
 }
 
 func (sess *Session) handle_notimplemented(event Event) {
@@ -97,15 +124,26 @@ func (sess *Session) handle_sync(event Event) {
 	// taglib indicates a pending tag. It will ignore the tag (and its own
 	// cycle) and process like a regular client-side-sync(css). (don't forget to
 	// update taglib in the end
-	shadow := sess.shadows[data.res.StringId()]
+	shadow, ok := sess.shadows[data.res.StringID()]
+	if !ok {
+		log.Println("shadow not found, cannot sync", data.res, sess.shadows)
+		return
+
+	}
+	store, ok := sess.stores[shadow.res.kind]
+	if !ok {
+		log.Println("received illegal resource kind:", shadow.res.kind)
+		return
+	}
 	for _, edit := range data.changes {
-		changed, err := shadow.SyncIncoming(edit)
-		log.Println(changed, err) //todo error handling! do we need 'changed' here?
+		if changed, err := shadow.SyncIncoming(edit, store); err != nil {
+			log.Println("ERRR sync", changed, err) //todo error handling! do we need 'changed' here?
+		}
 	}
 	// cleanup tag
-	defer delete(sess.taglib, data.res.StringId())
+	defer delete(sess.taglib, data.res.StringID())
 	// check event-tag
-	if mytag, ok := sess.taglib[data.res.StringId()]; ok && mytag == event.tag {
+	if mytag, ok := sess.taglib[data.res.StringID()]; ok && mytag == event.tag {
 		//received a response to a server-side-sync(sss) cycle
 		// we're all done!
 		// note this relies on the fact that during sync-incoming, appropriate
@@ -116,7 +154,7 @@ func (sess *Session) handle_sync(event Event) {
 	// Preparing and sending out the changes for the response to the css
 
 	// calculate changes and add them to pending and incease our SV
-	shadow.UpdatePending()
+	shadow.UpdatePending(store)
 	data.changes = shadow.pending
 	event.data = data
 	if !sess.push_client(event) {
@@ -178,4 +216,40 @@ func (session *Session) UnmarshalJSON(from []byte) error {
 		shadows: vals["shadows"].(map[string]*Shadow),
 	}
 	return nil
+}
+
+type SessionData struct {
+	token   string
+	session *Session
+}
+
+func (s SessionData) MarshalJSON() ([]byte, error) {
+	//folio := Resource{}
+	//contacts := Resource{}
+	notes := make(map[string]*Resource)
+	//meta := make(map[string]Resource)
+
+	for _, shadow := range s.session.shadows {
+		switch shadow.res.kind {
+		//   case "folio":
+		//       folio = shadow.res
+		//   case "contacts":
+		//       contacts = shadow.res
+		case "note":
+			notes[shadow.res.id] = &shadow.res
+			//        case "meta":
+			//meta[shadow.res.id] = shadow.res
+		default:
+		}
+
+	}
+	return json.Marshal(map[string]interface{}{
+		"sid":   s.session.id,
+		"token": s.token,
+		"uid":   s.session.uid,
+		//"folio":  folio,
+		//"contacts": contacts,
+		"notes": notes,
+		//"meta": meta,
+	})
 }
