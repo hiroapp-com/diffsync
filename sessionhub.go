@@ -8,14 +8,26 @@ type SessionHub struct {
 	inbox       chan Event
 	runner_done chan string
 	active      map[string]chan<- Event
-	store       SessionStore
+	backend     SessionBackend
+	stores      map[string]*Store
 }
 
-func NewSessionHub(store SessionStore) SessionHub {
-	return SessionHub{make(chan Event), make(chan string), map[string]chan<- Event{}, store}
+func NewSessionHub(backend SessionBackend, stores map[string]*Store) *SessionHub {
+	return &SessionHub{
+		inbox:       make(chan Event),
+		runner_done: make(chan string),
+		active:      map[string]chan<- Event{},
+		backend:     backend,
+		stores:      stores,
+	}
+}
+
+func (hub *SessionHub) Inbox() chan<- Event {
+	return hub.inbox
 }
 
 func (hub *SessionHub) route(sid string, event Event) error {
+	log.Printf("routing package for sid %s", sid)
 	inbox, ok := hub.active[sid]
 	if !ok {
 		// if not already running, load from datastore and spawn runner
@@ -27,7 +39,7 @@ func (hub *SessionHub) route(sid string, event Event) error {
 				hub.runner_done <- sid
 			}(sid)
 			log.Println(sid, "spawning up new inbox runner")
-			session, err := hub.store.Get(sid)
+			session, err := hub.backend.Get(sid)
 			if err != nil {
 				// in that case a stupid race-condition might occure: if the runner
 				// aborts before routing the event to the runners-inbox, the write will
@@ -40,6 +52,7 @@ func (hub *SessionHub) route(sid string, event Event) error {
 				log.Println(sid, "Cannot fetch Session from sessionstore. aborting runner.")
 				return
 			}
+			session.stores = hub.stores
 			for event := range newinbox {
 				session.Handle(event)
 			}
@@ -68,9 +81,11 @@ func (hub *SessionHub) Run() {
 			hub.cleanup_runner(sid)
 		}
 	}()
+	log.Println("spawning hub-runner...")
 	for {
 		select {
 		case sid := <-hub.runner_done:
+			log.Printf("received: runner done (%s)", sid)
 			// make sure channel is closed and remove chan from active-cache
 			hub.cleanup_runner(sid)
 		case event, ok := <-hub.inbox:
@@ -78,19 +93,8 @@ func (hub *SessionHub) Run() {
 				//inbox closed, shutdown requested
 				return
 			}
-			switch event.name {
-			case "session-create":
-				//handle session-create with token
-				// probably we can pass the session-create event onto the newly created Session so it can repond with its part
-				// e.g. send up the new session-workspace
-			case "state-sync":
-			case "state-reset":
-			case "state-taint":
-			case "client-ehlo":
-			case "flush":
-				hub.route(event.sid, event)
-				//TODO catch write to
-			}
+			log.Printf("received: event (%s:%s)", event.sid, event.name)
+			hub.route(event.sid, event)
 		}
 	}
 }
