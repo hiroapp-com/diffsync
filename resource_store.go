@@ -20,20 +20,22 @@ func NewStore(backend StoreBackend) *Store {
 }
 
 func (store *Store) Load(res *Resource) error {
+	log.Printf("resource[%s:%p]: loading data", res.StringID(), res)
 	// todo: send get request via gdata connection
-	value, err := store.backend.Get(res.id)
+	value, err := store.backend.Get(res.ID)
 	if err != nil {
 		return err
 	}
 	// for now we can ignore the exists flag. if it's a new note, here we'll return a blank/initialized value
 	// which is the desired case (behaviour needs more documentation). Also the patch matchod will easily
 	// make use of the same feature
-	(*res).ResourceValue = value.CloneValue()
+	(*res).Value = value.CloneValue()
 	return nil
 }
 
 func (store *Store) Patch(res *Resource, patch Patch) error {
-	value, err := store.backend.Get(res.id)
+	log.Printf("resource[%s:%p]: received patch `%v`", res.StringID(), res, patch)
+	value, err := store.backend.Get(res.ID)
 	if err != nil {
 		return err
 	}
@@ -41,10 +43,9 @@ func (store *Store) Patch(res *Resource, patch Patch) error {
 	// which is the desired case (behaviour needs more documentation). Also the patch matchod will easily
 	// make use of the same feature
 	value.ApplyPatch(patch, notify)
-	if err := store.backend.Upsert(res.id, value); err != nil {
+	if err := store.backend.Upsert(res.ID, value); err != nil {
 		return err
 	}
 	//test: note in notestore is modified?
-	(*res).ResourceValue = value.CloneValue()
 	return nil
 }

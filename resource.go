@@ -18,53 +18,26 @@ type ResourceValue interface {
 
 // todo(refactore) export fields
 type Resource struct {
-	kind string
-	id   string
-	ResourceValue
+	Kind  string        `json:"kind"`
+	ID    string        `json:"id"`
+	Value ResourceValue `json:"val,omitempty"`
 }
 
 func NewResource(kind, id string) Resource {
-	return Resource{kind: kind, id: id, ResourceValue: NilValue{}}
+	return Resource{Kind: kind, ID: id, Value: NilValue{}}
 }
 
 func (res *Resource) CloneEmpty() Resource {
-	return Resource{kind: res.kind, id: res.id, ResourceValue: NilValue{}}
+	return Resource{Kind: res.Kind, ID: res.ID, Value: NilValue{}}
 }
 
 func (res *Resource) StringID() string {
-	return fmt.Sprintf("%s:%s", res.kind, res.id)
+	return fmt.Sprintf("%s:%s", res.Kind, res.ID)
 }
 
 func (res *Resource) String() string {
-	if res.ResourceValue != nil {
-		return fmt.Sprintf("kind: `%s`, id:`%s`", res.kind, res.id)
+	if res.Value != nil {
+		return fmt.Sprintf("kind: `%s`, id:`%s`", res.Kind, res.ID)
 	}
-	return fmt.Sprintf("kind: `%s`, id:`%s`, value:`%s`", res.kind, res.id, res.ResourceValue.String())
-}
-
-func (res Resource) MarshalJSON() ([]byte, error) {
-	data := map[string]interface{}{
-		"kind": res.kind,
-		"id":   res.id,
-	}
-	if _, is_nil := res.ResourceValue.(NilValue); !is_nil {
-		data["val"] = res.ResourceValue
-	}
-	return json.Marshal(data)
-}
-
-func (res *Resource) UnmarshalJSON(from []byte) error {
-	vals := make(map[string]interface{})
-	json.Unmarshal(from, vals)
-	*res = Resource{
-		kind: vals["kind"].(string),
-		id:   vals["id"].(string),
-	}
-	switch resval := vals["val"].(type) {
-	case *NoteValue:
-	case *MetaValue:
-		res.ResourceValue = resval
-	default:
-	}
-	return nil
+	return fmt.Sprintf("kind: `%s`, id:`%s`, value:`%s`", res.Kind, res.ID, res.Value.String())
 }

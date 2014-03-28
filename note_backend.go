@@ -63,7 +63,7 @@ func (mem *NoteMemBackend) Delete(key string) error {
 func (mem *NoteMemBackend) DumpAll() []Resource {
 	res := make([]Resource, 0, len(mem.dict))
 	for id, val := range mem.dict {
-		res = append(res, Resource{kind: mem.Kind(), id: id, ResourceValue: val.CloneValue()})
+		res = append(res, Resource{Kind: mem.Kind(), ID: id, Value: val.CloneValue()})
 	}
 	return res
 }
