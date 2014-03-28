@@ -11,6 +11,28 @@ var (
 	_ = log.Print
 )
 
+type Auther interface {
+	Grant(string, string, *Resource)
+}
+
+type ResourceRegistry map[string]map[string]bool
+
+func (rr ResourceRegistry) Add(res *Resource) {
+	if _, ok := rr[res.Kind]; !ok {
+		rr[res.Kind] = make(map[string]bool)
+	}
+	rr[res.Kind][res.ID] = true
+}
+
+func (rr ResourceRegistry) Remove(res *Resource) {
+	if _, ok := rr[res.Kind]; ok {
+		delete(rr[res.Kind], res.ID)
+		if len(rr[res.Kind]) == 0 {
+			delete(rr, res.Kind)
+		}
+	}
+}
+
 type Session struct {
 	id      string
 	uid     string
