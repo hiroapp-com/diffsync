@@ -1,12 +1,8 @@
 package diffsync
 
-import (
-	"encoding/json"
-)
+import ()
 
-type Delta interface {
-	json.Marshaler
-}
+type Delta interface{}
 
 type Patch struct {
 	origin_sid string
@@ -14,17 +10,10 @@ type Patch struct {
 }
 
 type Edit struct {
-	SessionClock
-	delta Delta
+	Clock SessionClock `json:"clock"`
+	Delta Delta        `json:"delta"`
 }
 
 func NewEdit(delta Delta) Edit {
 	return Edit{SessionClock{}, delta}
-}
-
-func (edit Edit) MarshalJSON() ([]byte, error) {
-	return json.Marshal(map[string]interface{}{
-		"clock": edit.SessionClock,
-		"delta": edit.delta,
-	})
 }
