@@ -83,9 +83,9 @@ func (hirotok *HiroTokens) Consume(token_key string, sid string) (string, error)
 		// load current value
 		log.Printf("loading add adding new resource to session `%s`: `%v`\n", session.id, res)
 		newres := res.CloneEmpty()
-		store = hirotok.stores[newres.kind]
+		store = hirotok.stores[newres.Kind]
 		if store == nil {
-			return "", fmt.Errorf("unknown resource kind: `%s`", newres.kind)
+			return "", fmt.Errorf("unknown resource kind: `%s`", newres.Kind)
 		}
 		err := store.Load(&newres)
 		if err != nil {
