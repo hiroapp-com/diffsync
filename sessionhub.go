@@ -27,7 +27,7 @@ func (hub *SessionHub) Inbox() chan<- Event {
 }
 
 func (hub *SessionHub) route(sid string, event Event) error {
-	log.Printf("routing package for sid %s", sid)
+	log.Printf("sessionhub: routing event for sid %s", sid)
 	inbox, ok := hub.active[sid]
 	if !ok {
 		// if not already running, load from datastore and spawn runner
@@ -38,7 +38,7 @@ func (hub *SessionHub) route(sid string, event Event) error {
 				//signal shuwdown of runner to hub
 				hub.runner_done <- sid
 			}(sid)
-			log.Println(sid, "spawning up new inbox runner")
+			log.Printf("session[%s]: starting up runner\n", sid)
 			session, err := hub.backend.Get(sid)
 			if err != nil {
 				// in that case a stupid race-condition might occure: if the runner
@@ -49,25 +49,26 @@ func (hub *SessionHub) route(sid string, event Event) error {
 				// If this race-condition hits, we will lose this packet to nirvana
 				// (channel gets closed and gc'd when routine reports it shuts down to
 				// hub
-				log.Println(sid, "Cannot fetch Session from sessionstore. aborting runner.")
+				log.Printf("session[%s]: could not retrieve sessiondata. aborting.\n", sid)
 				return
 			}
 			session.stores = hub.stores
 			for event := range newinbox {
 				session.Handle(event)
 			}
-			log.Println(sid, "shutting down inbox runner")
+			log.Println("sessionid: shutting down inbox runner for sid ", sid)
 		}()
 		hub.active[sid] = newinbox
 		inbox = newinbox
 	}
+	log.Println("sessionhub: sending event to session", event)
 	inbox <- event
 	return nil
 }
 
 func (hub *SessionHub) cleanup_runner(sid string) {
 	if inbox, ok := hub.active[sid]; ok {
-		log.Println(sid, "stopping runner")
+		log.Println("sessionhub: cleaning up runner for sid", sid)
 		delete(hub.active, sid)
 		close(inbox)
 	}
@@ -77,15 +78,15 @@ func (hub *SessionHub) Run() {
 	// spawn the hubrunner
 	defer func() {
 		for sid := range hub.active {
-			log.Println("shutting down session-handler", sid)
+			log.Printf("sessionhub: shutting down runner for %s \n", sid)
 			hub.cleanup_runner(sid)
 		}
 	}()
-	log.Println("spawning hub-runner...")
+	log.Println("sessionhub: entering main loop")
 	for {
 		select {
 		case sid := <-hub.runner_done:
-			log.Printf("received: runner done (%s)", sid)
+			log.Printf("sessionhub: sess-runner signaled shutdown %s\n", sid)
 			// make sure channel is closed and remove chan from active-cache
 			hub.cleanup_runner(sid)
 		case event, ok := <-hub.inbox:
@@ -93,8 +94,8 @@ func (hub *SessionHub) Run() {
 				//inbox closed, shutdown requested
 				return
 			}
-			log.Printf("received: event (%s:%s)", event.sid, event.name)
-			hub.route(event.sid, event)
+			log.Printf("sessionhub: received: event (%s:%s)", event.SID, event.Name)
+			hub.route(event.SID, event)
 		}
 	}
 }
