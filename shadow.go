@@ -15,26 +15,28 @@ type Shadow struct {
 func NewShadow(res Resource) *Shadow {
 	return &Shadow{
 		res:          res,
-		backup:       res.CloneValue(),
+		backup:       res.Value.CloneValue(),
 		pending:      []Edit{},
 		SessionClock: SessionClock{},
 	}
 }
 
 func (shadow *Shadow) Rollback() {
-	shadow.res.ResourceValue = shadow.backup
+	shadow.res.Value = shadow.backup
 	shadow.pending = []Edit{}
 }
 
 func (shadow *Shadow) UpdatePending(store *Store) error {
-	//send "res-load" to store
 	res := shadow.res.CloneEmpty()
-	// noteStore needs to be abstracted away to abstract Store
+	log.Printf("shadow[%s:%p]: calculating new delta and upate pending-queue\n", res.StringID(), &res)
 	_ = store.Load(&res)
-	delta, err := shadow.res.GetDelta(res.ResourceValue)
+	log.Printf("shadow[%s:%p]: current mastertext: `%s`\n", res.StringID(), &res, res.Value)
+	log.Printf("shadow[%s:%p]: current shadowtext: `%s`\n", shadow.res.StringID(), &shadow.res, shadow.res.Value)
+	delta, err := shadow.res.Value.GetDelta(res.Value)
 	if err != nil {
 		return err
 	}
+	log.Printf("shadow[%s:%p]: found delta: `%s`\n", res.StringID(), &res, delta)
 	shadow.pending = append(shadow.pending, Edit{shadow.SessionClock.Clone(), delta})
 	shadow.IncSv()
 	return nil
@@ -44,23 +46,24 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err e
 	// Make sure clocks are in sync or recoverable
 	log.Println(edit)
 	log.Println(shadow)
-	if err := shadow.SessionClock.SyncSvWith(edit, shadow); err != nil {
+	if err := shadow.SessionClock.SyncSvWith(edit.Clock, shadow); err != nil {
 		return false, err
 	}
-	pending := make([]Edit, len(shadow.pending))
+	pending := make([]Edit, 0, len(shadow.pending))
 	for _, instack := range shadow.pending {
-		if !edit.Ack(instack) {
+		if !edit.Clock.Ack(instack.Clock) {
 			pending = append(pending, instack)
 		}
 	}
-	if dupe, err := shadow.CheckCV(edit); dupe {
+	shadow.pending = pending
+	if dupe, err := shadow.CheckCV(edit.Clock); dupe {
 		return false, nil
 	} else if err != nil {
 		log.Printf("err sync cv")
 		return false, err
 	}
-	patch, err := shadow.res.ApplyDelta(edit.delta)
-	shadow.backup = shadow.res.ResourceValue
+	patch, err := shadow.res.Value.ApplyDelta(edit.Delta)
+	shadow.backup = shadow.res.Value.CloneValue()
 	if err != nil {
 		return false, err
 	}
@@ -69,8 +72,6 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err e
 		// no changes, we're finished
 		return false, nil
 	}
-	// TODO send res-patch down to res_store
-	//    newres = {kind: "note", id
 	return true, store.Patch(&(*shadow).res, patch)
 }
 
