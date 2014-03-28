@@ -77,10 +77,12 @@ func (sess *Session) diff_resources(check []Resource) []Resource {
 	return news
 }
 func (sess *Session) Handle(event Event) {
+	log.Printf("session[%s]: handling %s event\n", sess.id, event.Name)
 	if event.client != nil {
+		log.Printf("session[%s]: overwriting client\n", sess.id)
 		sess.client = event.client
 	}
-	switch event.name {
+	switch event.Name {
 	case "session-create":
 		sess.handle_session_create(event)
 	case "res-taint":
@@ -97,9 +99,7 @@ func (sess *Session) Handle(event Event) {
 }
 
 func (sess *Session) handle_session_create(event Event) {
-	log.Printf("pushing event %v", event)
-	event.data = SessionData{"", sess}
-	log.Printf("changed event %v", event)
+	event.Session = &SessionData{sess}
 	sess.push_client(event)
 }
 
@@ -132,10 +132,14 @@ func (sess *Session) handle_sync(event Event) {
 	// still one *cannot* expect to have a receiving client (just in the middle
 	// of the sync the client might have disconnected). hence, don't forget to
 	// cover that edge-case
-	data, ok := event.data.(SyncData)
-	if !ok {
+	if event.Res == nil {
 		// eeeek, log and or respond that data was malformed
 		// for now just discard
+		log.Printf("session[%s]: malformed data; res missing\n", sess.id)
+		return
+	}
+	if event.Changes == nil {
+		log.Printf("session[%s]: malformed data; changes missing\n", sess.id)
 		return
 	}
 	// todo(ACL) check if session may access data.res
@@ -146,26 +150,26 @@ func (sess *Session) handle_sync(event Event) {
 	// taglib indicates a pending tag. It will ignore the tag (and its own
 	// cycle) and process like a regular client-side-sync(css). (don't forget to
 	// update taglib in the end
-	shadow, ok := sess.shadows[data.res.StringID()]
+	shadow, ok := sess.shadows[event.Res.StringID()]
 	if !ok {
-		log.Println("shadow not found, cannot sync", data.res, sess.shadows)
+		log.Println("shadow not found, cannot sync", event.Res, sess.shadows)
 		return
 
 	}
-	store, ok := sess.stores[shadow.res.kind]
+	store, ok := sess.stores[shadow.res.Kind]
 	if !ok {
-		log.Println("received illegal resource kind:", shadow.res.kind)
+		log.Println("received illegal resource kind:", shadow.res.Kind)
 		return
 	}
-	for _, edit := range data.changes {
+	for _, edit := range event.Changes {
 		if changed, err := shadow.SyncIncoming(edit, store); err != nil {
 			log.Println("ERRR sync", changed, err) //todo error handling! do we need 'changed' here?
 		}
 	}
 	// cleanup tag
-	defer delete(sess.taglib, data.res.StringID())
+	defer delete(sess.taglib, event.Res.StringID())
 	// check event-tag
-	if mytag, ok := sess.taglib[data.res.StringID()]; ok && mytag == event.tag {
+	if mytag, ok := sess.taglib[event.Res.StringID()]; ok && mytag == event.Tag {
 		//received a response to a server-side-sync(sss) cycle
 		// we're all done!
 		// note this relies on the fact that during sync-incoming, appropriate
@@ -177,12 +181,11 @@ func (sess *Session) handle_sync(event Event) {
 
 	// calculate changes and add them to pending and incease our SV
 	shadow.UpdatePending(store)
-	data.changes = shadow.pending
-	event.data = data
+	event.Changes = shadow.pending
 	if !sess.push_client(event) {
 		// edge-case happened: client sent request and disconnected before we
 		// could response. set tainted state for resource.
-		sess.tainted.Add(&data.res)
+		sess.tainted.Add(event.Res)
 	}
 	// note: the following should probably already happen at the resource
 	// store layer (i.e. sending taint packets with patch.origin_sid as event.sid
@@ -192,7 +195,8 @@ func (sess *Session) handle_sync(event Event) {
 	// this means, the current session will not receive the event (being
 	// the origin), but we already updated the tainted registry above
 	// on the next client-message the change will be flushed
-	notify <- Event{name: "res-taint", sid: sess.id, data: data.res.CloneEmpty()}
+
+	//notify <- Event{Name: "res-taint", SID: sess.id, Res: &event.Res.CloneEmpty()}
 	return
 }
 
@@ -241,7 +245,6 @@ func (session *Session) UnmarshalJSON(from []byte) error {
 }
 
 type SessionData struct {
-	token   string
 	session *Session
 }
 
@@ -252,13 +255,13 @@ func (s SessionData) MarshalJSON() ([]byte, error) {
 	//meta := make(map[string]Resource)
 
 	for _, shadow := range s.session.shadows {
-		switch shadow.res.kind {
+		switch shadow.res.Kind {
 		//   case "folio":
 		//       folio = shadow.res
 		//   case "contacts":
 		//       contacts = shadow.res
 		case "note":
-			notes[shadow.res.id] = &shadow.res
+			notes[shadow.res.ID] = &shadow.res
 			//        case "meta":
 			//meta[shadow.res.id] = shadow.res
 		default:
@@ -266,9 +269,8 @@ func (s SessionData) MarshalJSON() ([]byte, error) {
 
 	}
 	return json.Marshal(map[string]interface{}{
-		"sid":   s.session.id,
-		"token": s.token,
-		"uid":   s.session.uid,
+		"sid": s.session.id,
+		"uid": s.session.uid,
 		//"folio":  folio,
 		//"contacts": contacts,
 		"notes": notes,
