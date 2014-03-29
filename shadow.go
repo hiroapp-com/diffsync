@@ -6,14 +6,16 @@ import (
 )
 
 type Shadow struct {
+	sid     string
 	res     Resource
 	backup  ResourceValue
 	pending []Edit
 	SessionClock
 }
 
-func NewShadow(res Resource) *Shadow {
+func NewShadow(res Resource, sid string) *Shadow {
 	return &Shadow{
+		sid:          sid,
 		res:          res,
 		backup:       res.Value.CloneValue(),
 		pending:      []Edit{},
@@ -72,6 +74,7 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err e
 		// no changes, we're finished
 		return false, nil
 	}
+	patch.origin_sid = shadow.sid
 	return true, store.Patch(&(*shadow).res, patch)
 }
 

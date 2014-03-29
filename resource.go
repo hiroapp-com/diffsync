@@ -36,7 +36,7 @@ func (res *Resource) StringID() string {
 }
 
 func (res *Resource) String() string {
-	if res.Value != nil {
+	if res.Value == nil {
 		return fmt.Sprintf("kind: `%s`, id:`%s`", res.Kind, res.ID)
 	}
 	return fmt.Sprintf("kind: `%s`, id:`%s`, value:`%s`", res.Kind, res.ID, res.Value.String())

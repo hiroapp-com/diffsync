@@ -24,6 +24,16 @@ func (rr ResourceRegistry) Add(res *Resource) {
 	rr[res.Kind][res.ID] = true
 }
 
+func (rr ResourceRegistry) Tainted() []Resource {
+	tainted := make([]Resource, 0, len(rr))
+	for kind, idmaps := range rr {
+		for id, _ := range idmaps {
+			tainted = append(tainted, Resource{Kind: kind, ID: id})
+		}
+	}
+	return tainted
+}
+
 func (rr ResourceRegistry) Remove(res *Resource) {
 	if _, ok := rr[res.Kind]; ok {
 		delete(rr[res.Kind], res.ID)
@@ -93,9 +103,12 @@ func (sess *Session) Handle(event Event) {
 		sess.handle_sync(event)
 	case "client-ehlo":
 		sess.handle_ehlo(event)
+	case "client-gone":
+		sess.handle_gone(event)
 	default:
 		sess.handle_notimplemented(event)
 	}
+	sess.flush()
 }
 
 func (sess *Session) handle_session_create(event Event) {
@@ -107,13 +120,50 @@ func (sess *Session) handle_notimplemented(event Event) {
 	return
 }
 
-func (sess *Session) flush(event Event) {
+func (sess *Session) handle_gone(event Event) {
+	log.Printf("session[%s]: client gone\n", sess.id)
+	if sess.client != nil {
+		close(sess.client)
+		sess.client = nil
+	}
+}
+
+func (sess *Session) flush() {
 	// iterate over reset-resources and tainted resources and send syncs to client (if any)
+	if sess.client == nil {
+		log.Printf("session[%s]: flush requested, but client offline\n", sess.id)
+		return
+	}
+	for _, res := range sess.tainted.Tainted() {
+		log.Printf("session[%s]: flushin' tainted resource: %s\n", sess.id, res)
+		store, ok := sess.stores[res.Kind]
+		if !ok {
+			log.Println("received illegal resource kind:", res.Kind)
+			return
+		}
+		shadow, ok := sess.shadows[res.StringID()]
+		if !ok {
+			log.Println("shadow not found, cannot sync", res, sess.shadows)
+			return
+
+		}
+		shadow.UpdatePending(store)
+		sess.tainted.Remove(&res)
+		ref := res.CloneEmpty()
+		event := Event{Name: "res-sync", Tag: "srv01", SID: sess.id, Res: &ref, Changes: shadow.pending}
+		sess.taglib[res.StringID()] = event.Tag
+		if !sess.push_client(event) {
+			// client went offline, stop for now
+			log.Printf("session[%s]: client went offline during flush. aborting", sess.id)
+			return
+		}
+	}
+	// todo: check other pending send
 	return
 }
 
 func (sess *Session) handle_ehlo(event Event) {
-	sess.client = event.client
+	log.Printf("session[%s]: received client-ehlo. saved new client and flushing changes", sess.id)
 	return
 }
 
@@ -122,6 +172,11 @@ func (sess *Session) push_client(event Event) bool {
 	case sess.client <- event:
 		return true
 	default:
+	}
+	// if client cannot read events, we assume he's offline
+	if sess.client != nil {
+		close(sess.client)
+		sess.client = nil
 	}
 	return false
 }
@@ -201,23 +256,12 @@ func (sess *Session) handle_sync(event Event) {
 }
 
 func (sess *Session) handle_taint(event Event) {
-	//sess.tainted_states.Add(data.res)
-	return
+	log.Printf("session[%s]: handling taint event for %s, all tainted: %s", sess.id, event.Res, sess.tainted)
+	sess.tainted.Add(event.Res)
+	log.Printf("session[%s]:  all tainted: %s", sess.id, sess.tainted)
 }
 func (sess *Session) handle_reset(event Event) {
-	//state, ok := (event.data).(State)
-	//if !ok {
-	//    // malformed, pass on; how should we handle this case?
-	//    continue
-	//}
-	//if event.tag == "" && sess.client == nil {
-	//   sess.reset_states.Add(state.res)
-	//}
-	//state = statestore.New(sess.id, res, id)
-	//if event.tag == "" {
-	//    event.tag = taglib.NewTag(state)
-	//}
-	// check other tagging stuff
+	sess.reset.Add(event.Res)
 }
 
 func (s *Session) MarshalJSON() ([]byte, error) {
