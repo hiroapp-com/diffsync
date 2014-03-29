@@ -5,17 +5,21 @@ import (
 )
 
 type Conn struct {
+	sid        string
 	sessionhub chan<- Event
 	to_client  chan Event
 	TokenConsumer
 }
 
 func NewConn(hub chan<- Event, consumer TokenConsumer) *Conn {
-	return &Conn{hub, make(chan Event, 32), consumer}
+	log.Printf("conn: spawning new connection \n")
+	return &Conn{sessionhub: hub, to_client: make(chan Event, 32), TokenConsumer: consumer}
 }
 
 func (conn *Conn) Close() {
-	close(conn.to_client)
+	log.Printf("conn[%p]: shutting down, stopping listening on channel\n", conn)
+	conn.to_client = nil
+	conn.sessionhub <- Event{Name: "client-gone", SID: conn.sid}
 }
 
 func (conn *Conn) ToClient() <-chan Event {
@@ -32,20 +36,21 @@ func validSID(key string) bool {
 
 func (conn *Conn) ClientEvent(event Event) {
 	if event.Name == "session-create" {
-		log.Println("connection received `session-create` token: ", event.Token, "sid:", event.SID)
+		log.Printf("conn[%p]: received `session-create` with token: `%s` and sid `%s`\n", conn, event.Token, event.SID)
 		if !validToken(event.Token) || !validSID(event.SID) {
 			//malformed data
 			// response with error response on to_client
-			log.Println("connection: malformed data, abort. sid:", event.SID)
+			log.Printf("conn[%p]: malformed data, abort.\n", conn)
 			return
 		}
 		var err error
 		event.SID, err = conn.TokenConsumer.Consume(event.Token, event.SID)
 		if err != nil {
-			log.Println("token cannot be consumed, aborting session-create")
+			log.Print("conn[%p]: token cannot be consumed, aborting session-create", conn)
 			//todo tell to_client about the error
 			return
 		}
+		conn.sid = event.SID
 	}
 	event.client = conn.to_client
 	conn.sessionhub <- event
