@@ -92,7 +92,7 @@ func (hirotok *HiroTokens) Consume(token_key string, sid string) (string, error)
 			//todo get rid of panic
 			panic(err)
 		}
-		session.shadows[newres.StringID()] = NewShadow(newres)
+		session.shadows[newres.StringID()] = NewShadow(newres, session.id)
 		modified = true
 	}
 	if modified {
