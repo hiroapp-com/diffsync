@@ -54,7 +54,8 @@ func (hub *SessionHub) route(sid string, event Event) error {
 			}
 			session.stores = hub.stores
 			for event := range newinbox {
-				session.Handle(event)
+				cpy := event
+				session.Handle(cpy)
 			}
 			log.Println("sessionid: shutting down inbox runner for sid ", sid)
 		}()
