@@ -18,6 +18,7 @@ type SessionBackend interface {
 	Save(*Session) error
 	Delete(string) error
 	Release(*Session)
+	GetSubscriptions(Subscription) []Subscription
 }
 
 type InvalidSessionId struct {
@@ -92,4 +93,13 @@ func (mem *HiroMemSessions) Release(sess *Session) {
 	case mem.sessbuff <- sess:
 	default:
 	}
+}
+
+func (mem *HiroMemSessions) GetSubscriptions(ref Subscription) []Subscription {
+	// SUBSCRIBE ALL THE SESSIONS
+	subs := make([]Subscription, 0, len(mem.db))
+	for _, sess := range mem.db {
+		subs = append(subs, Subscription{sid: sess.id, uid: sess.uid, res: ref.res.CloneEmpty()})
+	}
+	return subs
 }
