@@ -46,7 +46,7 @@ func (conn *Conn) ClientEvent(event Event) {
 		var err error
 		event.SID, err = conn.TokenConsumer.Consume(event.Token, event.SID)
 		if err != nil {
-			log.Print("conn[%p]: token cannot be consumed, aborting session-create", conn)
+			log.Printf("conn[%p]: token cannot be consumed, aborting session-create\n", conn)
 			//todo tell to_client about the error
 			return
 		}
