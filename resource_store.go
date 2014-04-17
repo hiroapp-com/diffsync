@@ -12,12 +12,13 @@ var (
 )
 
 type Store struct {
+	kind    string
 	backend StoreBackend
 	notify  chan<- Event
 }
 
-func NewStore(backend StoreBackend, notify chan<- Event) *Store {
-	return &Store{backend: backend, notify: notify}
+func NewStore(kind string, backend StoreBackend, notify chan<- Event) *Store {
+	return &Store{kind: kind, backend: backend, notify: notify}
 }
 
 func (store *Store) Load(res *Resource) error {
@@ -36,20 +37,20 @@ func (store *Store) Load(res *Resource) error {
 
 func (store *Store) NotifyReset(id string, sid string) {
 	select {
-	case store.notify <- Event{Name: "res-reset", SID: sid, Res: &Resource{Kind: store.backend.Kind(), ID: id}}:
+	case store.notify <- Event{Name: "res-reset", SID: sid, Res: &Resource{Kind: store.kind, ID: id}}:
 		return
 	default:
-		log.Printf("store[%s]: cannot send `res-reset`, notify channel not writable.\n", store.backend.Kind())
+		log.Printf("store[%s]: cannot send `res-reset`, notify channel not writable.\n", store.kind)
 	}
 }
 
 func (store *Store) NotifyTaint(id string, sid string) {
-	res := Resource{Kind: store.backend.Kind(), ID: id}
+	res := Resource{Kind: store.kind, ID: id}
 	select {
 	case store.notify <- Event{Name: "res-taint", SID: sid, Res: &res}:
 		return
 	default:
-		log.Printf("store[%s]: cannot send `res-taint`, notify channel not writable.\n", store.backend.Kind())
+		log.Printf("store[%s]: cannot send `res-taint`, notify channel not writable.\n", store.kind)
 	}
 }
 
