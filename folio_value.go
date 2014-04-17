@@ -15,7 +15,6 @@ package diffsync
 
 // changeprop: key
 
-// BUG(flo): folio.Archive strangly gets modified accross different session/shadows?
 
 import (
 	"encoding/json"
@@ -85,6 +84,8 @@ func NewFolio() *Folio {
 func (folio *Folio) CloneValue() ResourceValue {
 	f := new(Folio)
 	*f = *folio
+	f.Docs = append([]string{}, folio.Docs...)
+	f.Archive = append([]string{}, folio.Archive...)
 	return f
 }
 
