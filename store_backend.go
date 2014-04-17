@@ -5,12 +5,11 @@ import (
 )
 
 type StoreBackend interface {
-	Kind() string
 	Get(string) (ResourceValue, error)
 	GetMany([]string) ([]ResourceValue, error)
 	Upsert(string, ResourceValue) error
 	Delete(string) error
-	DumpAll() []Resource
+	DumpAll(string) []Resource
 }
 
 type InvalidValueError struct {

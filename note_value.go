@@ -24,9 +24,13 @@ func (note *NoteValue) CloneValue() ResourceValue {
 }
 
 //note maybe make notify a global chan
-func (note *NoteValue) ApplyDelta(delta Delta) (Patch, error) {
+func (note *NoteValue) ApplyDelta(rawDelta json.RawMessage) (Patch, error) {
 	original := string(*note)
-	diffs, err := dmp.DiffFromDelta(original, delta.(string))
+	var delta string
+	if err := json.Unmarshal(rawDelta, &delta); err != nil {
+		return Patch{}, err
+	}
+	diffs, err := dmp.DiffFromDelta(original, delta)
 	if err != nil {
 		return Patch{}, err
 	}
@@ -52,14 +56,14 @@ func (note *NoteValue) ApplyPatch(patch Patch, notify chan<- Event) (changed boo
 	return changed, nil
 }
 
-func (note *NoteValue) GetDelta(latest ResourceValue) (Delta, error) {
+func (note *NoteValue) GetDelta(latest ResourceValue) (json.RawMessage, error) {
 	master, ok := latest.(*NoteValue)
 	if !ok {
 		return nil, fmt.Errorf("received illegal master-value for delta calculation")
 	}
 	diffs := dmp.DiffMain(string(*note), string(*master), false)
 	diffs = dmp.DiffCleanupEfficiency(diffs)
-	return string(dmp.DiffToDelta(diffs)), nil
+	return json.Marshal(dmp.DiffToDelta(diffs))
 }
 
 func (note *NoteValue) String() string {

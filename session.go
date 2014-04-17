@@ -293,15 +293,15 @@ type SessionData struct {
 }
 
 func (s SessionData) MarshalJSON() ([]byte, error) {
-	//folio := Resource{}
+	folio := Resource{}
 	//contacts := Resource{}
 	notes := make(map[string]*Resource)
 	//meta := make(map[string]Resource)
 
 	for _, shadow := range s.session.shadows {
 		switch shadow.res.Kind {
-		//   case "folio":
-		//       folio = shadow.res
+		case "folio":
+			folio = shadow.res
 		//   case "contacts":
 		//       contacts = shadow.res
 		case "note":
@@ -313,9 +313,9 @@ func (s SessionData) MarshalJSON() ([]byte, error) {
 
 	}
 	return json.Marshal(map[string]interface{}{
-		"sid": s.session.id,
-		"uid": s.session.uid,
-		//"folio":  folio,
+		"sid":   s.session.id,
+		"uid":   s.session.uid,
+		"folio": folio,
 		//"contacts": contacts,
 		"notes": notes,
 		//"meta": meta,

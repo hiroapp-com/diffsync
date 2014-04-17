@@ -60,10 +60,10 @@ func (mem *NoteMemBackend) Delete(key string) error {
 	return nil
 }
 
-func (mem *NoteMemBackend) DumpAll() []Resource {
+func (mem *NoteMemBackend) DumpAll(kind string) []Resource {
 	res := make([]Resource, 0, len(mem.dict))
 	for id, val := range mem.dict {
-		res = append(res, Resource{Kind: mem.Kind(), ID: id, Value: val.CloneValue()})
+		res = append(res, Resource{Kind: kind, ID: id, Value: val.CloneValue()})
 	}
 	return res
 }
