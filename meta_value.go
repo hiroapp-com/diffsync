@@ -6,12 +6,18 @@ import (
 	"time"
 )
 
+type Collaborator struct {
+	UID            string
+	CursorPosition int64
+	LastSeen       *time.Time
+}
+
 type MetaValue struct {
-	title         string
-	updated_at    *time.Time
-	updated_by    string
-	collaborators []string
-	seen_by       []string
+	Title         string
+	CreatedAt     time.Time
+	LastUpdateAt  time.Time
+	LastUpdateBy  string
+	Collaborators []Collaborator
 }
 
 //note maybe make notify a global chan
