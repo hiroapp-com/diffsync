@@ -7,8 +7,8 @@ import (
 
 // this means, shadows and doc-stores can now work with this defined object
 type ResourceValue interface {
-	ApplyDelta(Delta) (Patch, error)
-	GetDelta(ResourceValue) (Delta, error)
+	ApplyDelta(json.RawMessage) (Patch, error)
+	GetDelta(ResourceValue) (json.RawMessage, error)
 	ApplyPatch(Patch, chan<- Event) (bool, error)
 	CloneValue() ResourceValue
 	json.Marshaler

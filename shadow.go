@@ -39,8 +39,9 @@ func (shadow *Shadow) UpdatePending(store *Store) error {
 		return err
 	}
 	log.Printf("shadow[%s:%p]: found delta: `%s`\n", res.StringID(), &res, delta)
-	shadow.pending = append(shadow.pending, Edit{shadow.SessionClock.Clone(), delta})
+	shadow.pending = append(shadow.pending, Edit{shadow.SessionClock.Clone(), &delta})
 	shadow.IncSv()
+	shadow.res = res
 	return nil
 }
 
@@ -64,7 +65,7 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err e
 		log.Printf("err sync cv")
 		return false, err
 	}
-	patch, err := shadow.res.Value.ApplyDelta(edit.Delta)
+	patch, err := shadow.res.Value.ApplyDelta(*edit.Delta)
 	shadow.backup = shadow.res.Value.CloneValue()
 	if err != nil {
 		return false, err

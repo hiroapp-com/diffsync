@@ -10,11 +10,11 @@ import (
 // be used as a "reference" object.
 type NilValue struct{}
 
-func (note NilValue) ApplyDelta(delta Delta) (Patch, error) {
+func (note NilValue) ApplyDelta(delta json.RawMessage) (Patch, error) {
 	return Patch{}, fmt.Errorf("cannot apply delta to NilValue")
 }
 
-func (note NilValue) GetDelta(latest ResourceValue) (Delta, error) {
+func (note NilValue) GetDelta(latest ResourceValue) (json.RawMessage, error) {
 	return nil, fmt.Errorf("cannot get Delta from NilValue")
 }
 

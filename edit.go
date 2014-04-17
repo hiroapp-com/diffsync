@@ -1,8 +1,8 @@
 package diffsync
 
-import ()
-
-type Delta interface{}
+import (
+	"encoding/json"
+)
 
 type Patch struct {
 	origin_sid string
@@ -10,10 +10,6 @@ type Patch struct {
 }
 
 type Edit struct {
-	Clock SessionClock `json:"clock"`
-	Delta Delta        `json:"delta"`
-}
-
-func NewEdit(delta Delta) Edit {
-	return Edit{SessionClock{}, delta}
+	Clock SessionClock     `json:"clock"`
+	Delta *json.RawMessage `json:"delta"`
 }

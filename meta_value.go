@@ -1,6 +1,7 @@
 package diffsync
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -14,7 +15,7 @@ type MetaValue struct {
 }
 
 //note maybe make notify a global chan
-func (note *MetaValue) ApplyDelta(delta Delta) (Patch, error) {
+func (note *MetaValue) ApplyDelta(delta json.RawMessage) (Patch, error) {
 	return Patch{}, errors.New("Not implemented")
 }
 
@@ -23,8 +24,8 @@ func (note *MetaValue) ApplyPatch(patch Patch, notify chan<- Event) (changed boo
 	return false, errors.New("Not implemented")
 }
 
-func (note *MetaValue) GetDelta(other ResourceValue) (Delta, error) {
-	return NewNoteValue(""), errors.New("Not implemented")
+func (note *MetaValue) GetDelta(other ResourceValue) (json.RawMessage, error) {
+	return []byte{}, errors.New("Not implemented")
 }
 
 func (note *MetaValue) MarshalJSON() ([]byte, error) {
