@@ -76,7 +76,7 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err e
 		return false, nil
 	}
 	patch.origin_sid = shadow.sid
-	return true, store.Patch(&(*shadow).res, patch)
+	return true, store.Patch(&shadow.res, patch)
 }
 
 func (s *Shadow) MarshalJSON() ([]byte, error) {

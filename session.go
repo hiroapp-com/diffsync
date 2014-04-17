@@ -89,7 +89,7 @@ func (sess *Session) diff_resources(check []Resource) []Resource {
 func (sess *Session) Handle(event Event) {
 	log.Printf("session[%s]: handling %s event\n", sess.id, event.Name)
 	if event.client != nil {
-		log.Printf("session[%s]: overwriting client\n", sess.id)
+		log.Printf("session[%s]: setting upstream client chan\n", sess.id)
 		sess.client = event.client
 	}
 	switch event.Name {
@@ -286,6 +286,11 @@ func (session *Session) UnmarshalJSON(from []byte) error {
 		shadows: vals["shadows"].(map[string]*Shadow),
 	}
 	return nil
+}
+
+func (session *Session) String() string {
+	s, _ := json.MarshalIndent(session, "", "  ")
+	return string(s)
 }
 
 type SessionData struct {
