@@ -2,83 +2,174 @@ package diffsync
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	DMP "github.com/sergi/go-diff/diffmatchpatch"
 	"log"
+	"time"
 )
 
 var (
-	dmp = DMP.New()
-	_   = log.Print
+	_ = log.Print
 )
 
-type NoteValue string
-
-func NewNoteValue(text string) *NoteValue {
-	nv := NoteValue(text)
-	return &nv
+type User struct {
+	UID   string `json:"uid,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
+	Phone string `json:"phone,omitempty"`
 }
 
-func (note *NoteValue) CloneValue() ResourceValue {
-	return NewNoteValue(string(*note))
+type Note struct {
+	Title     string        `json:"title"`
+	Text      TextValue     `json:"text"`
+	Tribe     []TribeMember `json:"tribe"`
+	CreatedAt time.Time     `json:"created_at"`
+	CreatedBy User          `json:"created_by"`
 }
 
-//note maybe make notify a global chan
-func (note *NoteValue) ApplyDelta(rawDelta json.RawMessage) (Patch, error) {
-	original := string(*note)
-	var delta string
-	if err := json.Unmarshal(rawDelta, &delta); err != nil {
-		return Patch{}, err
+func NewNote(text string) Note {
+	return Note{Text: TextValue(text), CreatedAt: time.Now(), Tribe: []TribeMember{}}
+}
+
+func (note Note) CloneValue() ResourceValue {
+	return note
+}
+
+func (note Note) String() string {
+	return fmt.Sprintf("%#v", note)
+}
+
+func (note Note) GetDelta(latest ResourceValue) Delta {
+	master := latest.(Note)
+	delta := NewNoteDelta()
+	// calculate TextDelta
+	delta.Text = note.Text.GetDelta(master.Text).(TextDelta)
+	if note.Title != master.Title {
+		delta.Title = [2]string{note.Title, master.Title}
 	}
-	diffs, err := dmp.DiffFromDelta(original, delta)
-	if err != nil {
-		return Patch{}, err
+	// TODO(flo) calculate TribeDelta
+	//delta.Tribe = note.Tribe.GetDelta(master.Tribe).(TribeDelta)
+	return delta
+}
+
+func (note Note) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Title string        `json:"title"`
+		Text  string        `json:"text"`
+		Tribe []TribeMember `json:"tribe"`
+	}{note.Title, string(note.Text), note.Tribe})
+}
+
+func (note *Note) UnmarshalJSON(from []byte) error {
+	if err := json.Unmarshal(from, note); err != nil {
+		return err
 	}
-	patches := dmp.PatchMake(original, diffs)
-	*note = NoteValue(dmp.DiffText2(diffs))
-	if original == string(*note) {
-		// nil-value indicates that no changes happened
-		// todo doc this behaviour nearby Patch definition
-		return Patch{val: nil}, nil
-	}
-	return Patch{val: patches}, nil
+	return nil
+}
+
+type TribeMember struct {
+	UID            string     `json:"uid,omitempty"`
+	CursorPosition int64      `json:"cursor_pos,omitempty"`
+	LastSeen       *time.Time `json:"last_seen,omitempty"`
+	LastEdit       *time.Time `json:"last_edit,omitempty"`
+}
+
+//type tribePatch struct {
+//	action string
+//	ref    string
+//	obj    *TribeMember
+//}
+
+type notePatch struct {
+	property string
+	payload  interface{}
 }
 
 // maybe notify should be a global chan
-func (note *NoteValue) ApplyPatch(patch Patch, notify chan<- Event) (changed bool, err error) {
-	if patch.val == nil {
-		return false, nil
+func (patch notePatch) Apply(val ResourceValue, notify chan<- Event) (ResourceValue, error) {
+	var err error
+	note := val.(Note)
+	newnote := note.CloneValue().(Note)
+	switch patch.property {
+	case "text":
+		txtpatch, ok := patch.payload.(textPatch)
+		if !ok {
+			return nil, errors.New("invalid textPatch received")
+		}
+		newtxt, err := txtpatch.Apply(note.Text, notify)
+		if err != nil {
+			return nil, err
+		}
+		newnote.Text = newtxt.(TextValue)
+	case "title":
+		newnote.Title = patch.payload.(string)
+	case "tribe":
+		//todo
 	}
-	patched_str, _ := dmp.PatchApply(patch.val.([]DMP.Patch), string(*note))
-	changed = string(*note) != patched_str
-	*note = NoteValue(patched_str)
-	// more logical patches (like meta) could send res-taint events to notify after modifying others' resources (e.g. folio)
-	return changed, nil
+	return newnote, err
 }
 
-func (note *NoteValue) GetDelta(latest ResourceValue) (json.RawMessage, error) {
-	master, ok := latest.(*NoteValue)
+type TribeDelta struct {
+	Additions     []TribeMember          `json:"add"`
+	Removals      []TribeMember          `json:"rem"`
+	Modifications map[string]TribeMember `json:"mod"`
+}
+
+func (delta TribeDelta) HasChanges() bool {
+	return (len(delta.Additions) + len(delta.Removals) + len(delta.Modifications)) > 0
+}
+
+type NoteDelta struct {
+	Text  TextDelta  `json:"text"`
+	Title [2]string  `json:"title"`
+	Tribe TribeDelta `json:"tribe"`
+}
+
+func NewNoteDelta() NoteDelta {
+	return NoteDelta{Tribe: TribeDelta{Modifications: make(map[string]TribeMember)}}
+}
+
+func (delta NoteDelta) HasChanges() bool {
+	if delta.Text.HasChanges() {
+		return true
+	}
+	if delta.Title[0] != delta.Title[1] {
+		return true
+	}
+	if delta.Tribe.HasChanges() {
+		return true
+	}
+	return false
+}
+
+func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patch, error) {
+	original, ok := to.(Note)
+	newres := original.CloneValue().(Note)
 	if !ok {
-		return nil, fmt.Errorf("received illegal master-value for delta calculation")
+		return nil, nil, errors.New("cannot apply NoteDelta to non Note")
 	}
-	diffs := dmp.DiffMain(string(*note), string(*master), false)
-	diffs = dmp.DiffCleanupEfficiency(diffs)
-	return json.Marshal(dmp.DiffToDelta(diffs))
-}
-
-func (note *NoteValue) String() string {
-	return string(*note)
-}
-
-func (note *NoteValue) MarshalJSON() ([]byte, error) {
-	return json.Marshal(string(*note))
-}
-
-func (note *NoteValue) UnmarshalJSON(from []byte) error {
-	var s string
-	if err := json.Unmarshal(from, &s); err != nil {
-		return err
+	var err error
+	var tmptxt ResourceValue
+	patches := []Patch{}
+	if delta.Text.HasChanges() {
+		tmptxt, patches, err = delta.Text.Apply(original.Text)
+		if err != nil {
+			return nil, nil, err
+		}
+		newres.Text = tmptxt.(TextValue)
+		log.Println("PATCH: ", patches)
+		for i := range patches {
+			patches[i] = notePatch{"text", patches[i]}
+		}
+		log.Println("PATCH: ", patches)
 	}
-	*note = NoteValue(s)
-	return nil
+	if delta.Title[0] != delta.Title[1] && original.Title == delta.Title[0] {
+		newres.Title = delta.Title[1]
+		patches = append(patches, notePatch{"title", delta.Title[1]})
+	}
+	if delta.Tribe.HasChanges() {
+		//TODO
+		fmt.Println("todo: tribe deltas")
+	}
+	return newres, patches, nil
 }
