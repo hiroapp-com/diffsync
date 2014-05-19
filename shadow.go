@@ -34,12 +34,9 @@ func (shadow *Shadow) UpdatePending(store *Store) error {
 	_ = store.Load(&res)
 	log.Printf("shadow[%s:%p]: current mastertext: `%s`\n", res.StringID(), &res, res.Value)
 	log.Printf("shadow[%s:%p]: current shadowtext: `%s`\n", shadow.res.StringID(), &shadow.res, shadow.res.Value)
-	delta, err := shadow.res.Value.GetDelta(res.Value)
-	if err != nil {
-		return err
-	}
+	delta := shadow.res.Value.GetDelta(res.Value)
 	log.Printf("shadow[%s:%p]: found delta: `%s`\n", res.StringID(), &res, delta)
-	shadow.pending = append(shadow.pending, Edit{shadow.SessionClock.Clone(), &delta})
+	shadow.pending = append(shadow.pending, Edit{shadow.SessionClock.Clone(), delta})
 	shadow.IncSv()
 	shadow.res = res
 	return nil
@@ -65,18 +62,23 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err e
 		log.Printf("err sync cv")
 		return false, err
 	}
-	patch, err := shadow.res.Value.ApplyDelta(*edit.Delta)
-	shadow.backup = shadow.res.Value.CloneValue()
+	if !edit.Delta.HasChanges() {
+		return false, nil
+	}
+	newres, patches, err := edit.Delta.Apply(shadow.res.Value)
 	if err != nil {
 		return false, err
 	}
+	shadow.res.Value = newres
+	shadow.backup = newres
 	shadow.IncCv()
-	if patch.val == nil {
-		// no changes, we're finished
-		return false, nil
+	// send patches to store
+	for i := range patches {
+		if err = store.Patch(&shadow.res, patches[i], shadow.sid); err != nil {
+			return true, err
+		}
 	}
-	patch.origin_sid = shadow.sid
-	return true, store.Patch(&shadow.res, patch)
+	return true, nil
 }
 
 func (s *Shadow) MarshalJSON() ([]byte, error) {

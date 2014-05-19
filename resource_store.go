@@ -31,13 +31,13 @@ func (store *Store) Load(res *Resource) error {
 	// for now we can ignore the exists flag. if it's a new note, here we'll return a blank/initialized value
 	// which is the desired case (behaviour needs more documentation). Also the patch matchod will easily
 	// make use of the same feature
-	(*res).Value = value.CloneValue()
+	res.Value = value.CloneValue()
 	return nil
 }
 
 func (store *Store) NotifyReset(id string, sid string) {
 	select {
-	case store.notify <- Event{Name: "res-reset", SID: sid, Res: &Resource{Kind: store.kind, ID: id}}:
+	case store.notify <- Event{Name: "res-reset", SID: sid, Res: Resource{Kind: store.kind, ID: id}}:
 		return
 	default:
 		log.Printf("store[%s]: cannot send `res-reset`, notify channel not writable.\n", store.kind)
@@ -45,30 +45,28 @@ func (store *Store) NotifyReset(id string, sid string) {
 }
 
 func (store *Store) NotifyTaint(id string, sid string) {
-	res := Resource{Kind: store.kind, ID: id}
 	select {
-	case store.notify <- Event{Name: "res-taint", SID: sid, Res: &res}:
+	case store.notify <- Event{Name: "res-taint", SID: sid, Res: Resource{Kind: store.kind, ID: id}}:
 		return
 	default:
 		log.Printf("store[%s]: cannot send `res-taint`, notify channel not writable.\n", store.kind)
 	}
 }
 
-func (store *Store) Patch(res *Resource, patch Patch) error {
-	log.Printf("resource[%s:%p]: received patch `%v`", res.StringID(), res, patch)
+func (store *Store) Patch(res *Resource, patch Patch, sid string) error {
 	value, err := store.backend.Get(res.ID)
 	if err != nil {
 		return err
 	}
-	changed, err := value.ApplyPatch(patch, store.notify)
+	newval, err := patch.Apply(value, store.notify)
 	if err != nil {
 		return err
 	}
-	if changed {
-		if err := store.backend.Upsert(res.ID, value); err != nil {
+	if newval.GetDelta(value).HasChanges() {
+		if err := store.backend.Upsert(res.ID, newval); err != nil {
 			return err
 		}
-		store.NotifyTaint(res.ID, patch.origin_sid)
+		store.NotifyTaint(res.ID, sid)
 	}
 	return nil
 }

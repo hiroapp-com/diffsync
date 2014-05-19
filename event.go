@@ -55,13 +55,13 @@ type Event struct {
 	//
 	// Every sender should be aware that a receiver might modify
 	// the Res.
-	Res *Resource `json:"res,omitempty"`
+	Res Resource `json:"res,omitempty"`
 
 	// Session contains a complete "workspace" of a session
 	//
 	// It's mainly used in the respond to a session-create Event.
 	// See SessionData.MarshalJSON for more info about its layout
-	Session *SessionData `json:"session,omitempty"`
+	Session *Session `json:"session,omitempty"`
 
 	// A channel that wants from now on receive client-responses to this
 	// event and any further events for this Event's SID
@@ -75,5 +75,5 @@ type Event struct {
 }
 
 func NewEvent() Event {
-	return Event{Changes: []Edit{}, Res: nil, Session: nil}
+	return Event{Changes: []Edit{}, Res: Resource{}, Session: nil}
 }

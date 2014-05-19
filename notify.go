@@ -37,7 +37,7 @@ func (notify NotifyListener) Run(subs SubscriberChecker, sesshub chan<- Event) {
 			continue
 		}
 		uid_subs := map[string]struct{}{}
-		for _, sub := range subs.GetSubscriptions(Subscription{res: *event.Res}) {
+		for _, sub := range subs.GetSubscriptions(Subscription{res: event.Res}) {
 			log.Println("notify: found subscriber ", sub)
 			if sub.uid != "" {
 				// aggregate UIDs. We might get multiple sessions for same user

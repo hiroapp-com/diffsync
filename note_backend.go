@@ -1,15 +1,20 @@
 package diffsync
 
 import (
+	"log"
 	"sync"
 )
 
+var (
+	_ = log.Print
+)
+
 type NoteMemBackend struct {
-	dict map[string]*NoteValue
+	dict map[string]Note
 	sync.RWMutex
 }
 
-func NewNoteMemBackend(init map[string]*NoteValue) *NoteMemBackend {
+func NewNoteMemBackend(init map[string]Note) *NoteMemBackend {
 	return &NoteMemBackend{dict: init}
 }
 
@@ -24,7 +29,7 @@ func (mem *NoteMemBackend) Get(key string) (ResourceValue, error) {
 	defer mem.RUnlock()
 	noteval, ok := mem.dict[key]
 	if !ok {
-		noteval = NewNoteValue("")
+		noteval = NewNote("")
 	}
 	// tbd: should the (blank) resource already be created or can we wait for the
 	//      Upsert to happen later?
@@ -46,10 +51,10 @@ func (mem *NoteMemBackend) GetMany(keys []string) ([]ResourceValue, error) {
 func (mem *NoteMemBackend) Upsert(key string, note ResourceValue) error {
 	mem.Lock()
 	defer mem.Unlock()
-	if _, ok := note.(*NoteValue); !ok {
+	if _, ok := note.(Note); !ok {
 		return InvalidValueError{key, note}
 	}
-	mem.dict[key] = note.CloneValue().(*NoteValue)
+	mem.dict[key] = note.(Note)
 	return nil
 }
 

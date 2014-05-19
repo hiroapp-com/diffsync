@@ -17,7 +17,7 @@ type Auther interface {
 
 type ResourceRegistry map[string]map[string]bool
 
-func (rr ResourceRegistry) Add(res *Resource) {
+func (rr ResourceRegistry) Add(res Resource) {
 	if _, ok := rr[res.Kind]; !ok {
 		rr[res.Kind] = make(map[string]bool)
 	}
@@ -34,7 +34,7 @@ func (rr ResourceRegistry) Tainted() []Resource {
 	return tainted
 }
 
-func (rr ResourceRegistry) Remove(res *Resource) {
+func (rr ResourceRegistry) Remove(res Resource) {
 	if _, ok := rr[res.Kind]; ok {
 		delete(rr[res.Kind], res.ID)
 		if len(rr[res.Kind]) == 0 {
@@ -148,9 +148,9 @@ func (sess *Session) flush() {
 
 		}
 		shadow.UpdatePending(store)
-		sess.tainted.Remove(&res)
-		ref := res.CloneEmpty()
-		event := Event{Name: "res-sync", Tag: "srv01", SID: sess.id, Res: &ref, Changes: shadow.pending}
+		sess.tainted.Remove(res.CloneEmpty())
+		// TODO(flo) proper tag handling
+		event := Event{Name: "res-sync", Tag: "srv01", SID: sess.id, Res: res.CloneEmpty(), Changes: shadow.pending}
 		sess.taglib[res.StringID()] = event.Tag
 		if !sess.push_client(event) {
 			// client went offline, stop for now
@@ -187,7 +187,8 @@ func (sess *Session) handle_sync(event Event) {
 	// still one *cannot* expect to have a receiving client (just in the middle
 	// of the sync the client might have disconnected). hence, don't forget to
 	// cover that edge-case
-	if event.Res == nil {
+	if event.Res.ID == "" || event.Res.Kind == "" {
+		// TODO(flo) data validation should happen in adapter/connection layer
 		// eeeek, log and or respond that data was malformed
 		// for now just discard
 		log.Printf("session[%s]: malformed data; res missing\n", sess.id)
@@ -240,7 +241,8 @@ func (sess *Session) handle_sync(event Event) {
 	if !sess.push_client(event) {
 		// edge-case happened: client sent request and disconnected before we
 		// could response. set tainted state for resource.
-		sess.tainted.Add(event.Res)
+		log.Printf("session[%s]: client went offline during sync. taint resource (%s) for later flush", sess.id, event.Res.StringID())
+		sess.tainted.Add(event.Res.CloneEmpty())
 	}
 	// note: the following should probably already happen at the resource
 	// store layer (i.e. sending taint packets with patch.origin_sid as event.sid
@@ -257,11 +259,11 @@ func (sess *Session) handle_sync(event Event) {
 
 func (sess *Session) handle_taint(event Event) {
 	log.Printf("session[%s]: handling taint event for %s, all tainted: %s", sess.id, event.Res, sess.tainted)
-	sess.tainted.Add(event.Res)
+	sess.tainted.Add(event.Res.CloneEmpty())
 	log.Printf("session[%s]:  all tainted: %s", sess.id, sess.tainted)
 }
 func (sess *Session) handle_reset(event Event) {
-	sess.reset.Add(event.Res)
+	sess.reset.Add(event.Res.CloneEmpty())
 }
 
 func (s *Session) MarshalJSON() ([]byte, error) {
