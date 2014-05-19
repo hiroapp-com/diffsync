@@ -4,16 +4,22 @@ import (
 	"log"
 )
 
+type MessageAdapter interface {
+	MsgToEvent([]byte) (Event, error)
+	EventToMsg(Event) ([]byte, error)
+}
+
 type Conn struct {
 	sid        string
 	sessionhub chan<- Event
 	to_client  chan Event
 	TokenConsumer
+	MessageAdapter
 }
 
-func NewConn(hub chan<- Event, consumer TokenConsumer) *Conn {
+func NewConn(hub chan<- Event, consumer TokenConsumer, adapter MessageAdapter) *Conn {
 	log.Printf("conn: spawning new connection \n")
-	return &Conn{sessionhub: hub, to_client: make(chan Event, 32), TokenConsumer: consumer}
+	return &Conn{sessionhub: hub, to_client: make(chan Event, 32), TokenConsumer: consumer, MessageAdapter: adapter}
 }
 
 func (conn *Conn) Close() {
