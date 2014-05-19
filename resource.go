@@ -1,18 +1,18 @@
 package diffsync
 
+// TODO(flo): Rename CloneValue to Clone()
+// TODO(flo): Rename CloneEmpty to Ref()
+// TODO(flo): Rename StringID to StringRef()
+
 import (
 	"encoding/json"
 	"fmt"
 )
 
-// this means, shadows and doc-stores can now work with this defined object
 type ResourceValue interface {
-	ApplyDelta(json.RawMessage) (Patch, error)
-	GetDelta(ResourceValue) (json.RawMessage, error)
-	ApplyPatch(Patch, chan<- Event) (bool, error)
+	GetDelta(ResourceValue) Delta
 	CloneValue() ResourceValue
 	json.Marshaler
-	json.Unmarshaler
 	fmt.Stringer
 }
 
@@ -24,11 +24,11 @@ type Resource struct {
 }
 
 func NewResource(kind, id string) Resource {
-	return Resource{Kind: kind, ID: id, Value: NilValue{}}
+	return Resource{Kind: kind, ID: id}
 }
 
 func (res *Resource) CloneEmpty() Resource {
-	return Resource{Kind: res.Kind, ID: res.ID, Value: NilValue{}}
+	return Resource{Kind: res.Kind, ID: res.ID}
 }
 
 func (res *Resource) StringID() string {
