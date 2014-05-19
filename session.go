@@ -112,7 +112,7 @@ func (sess *Session) Handle(event Event) {
 }
 
 func (sess *Session) handle_session_create(event Event) {
-	event.Session = &SessionData{sess}
+	event.Session = sess
 	sess.push_client(event)
 }
 
@@ -291,38 +291,4 @@ func (session *Session) UnmarshalJSON(from []byte) error {
 func (session *Session) String() string {
 	s, _ := json.MarshalIndent(session, "", "  ")
 	return string(s)
-}
-
-type SessionData struct {
-	session *Session
-}
-
-func (s SessionData) MarshalJSON() ([]byte, error) {
-	folio := Resource{}
-	//contacts := Resource{}
-	notes := make(map[string]*Resource)
-	//meta := make(map[string]Resource)
-
-	for _, shadow := range s.session.shadows {
-		switch shadow.res.Kind {
-		case "folio":
-			folio = shadow.res
-		//   case "contacts":
-		//       contacts = shadow.res
-		case "note":
-			notes[shadow.res.ID] = &shadow.res
-			//        case "meta":
-			//meta[shadow.res.id] = shadow.res
-		default:
-		}
-
-	}
-	return json.Marshal(map[string]interface{}{
-		"sid":   s.session.id,
-		"uid":   s.session.uid,
-		"folio": folio,
-		//"contacts": contacts,
-		"notes": notes,
-		//"meta": meta,
-	})
 }
