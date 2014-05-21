@@ -99,7 +99,7 @@ func (mem *HiroMemSessions) GetSubscriptions(ref Subscription) []Subscription {
 	// SUBSCRIBE ALL THE SESSIONS
 	subs := make([]Subscription, 0, len(mem.db))
 	for _, sess := range mem.db {
-		subs = append(subs, Subscription{sid: sess.id, uid: sess.uid, res: ref.res.CloneEmpty()})
+		subs = append(subs, Subscription{sid: sess.id, uid: sess.uid, res: ref.res.Ref()})
 	}
 	return subs
 }

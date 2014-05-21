@@ -29,7 +29,7 @@ func (shadow *Shadow) Rollback() {
 }
 
 func (shadow *Shadow) UpdatePending(store *Store) error {
-	res := shadow.res.CloneEmpty()
+	res := shadow.res.Ref()
 	log.Printf("shadow[%s:%p]: calculating new delta and upate pending-queue\n", res.StringID(), &res)
 	_ = store.Load(&res)
 	log.Printf("shadow[%s:%p]: current mastertext: `%s`\n", res.StringID(), &res, res.Value)

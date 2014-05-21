@@ -148,9 +148,9 @@ func (sess *Session) flush() {
 
 		}
 		shadow.UpdatePending(store)
-		sess.tainted.Remove(res.CloneEmpty())
+		sess.tainted.Remove(res.Ref())
 		// TODO(flo) proper tag handling
-		event := Event{Name: "res-sync", Tag: "srv01", SID: sess.id, Res: res.CloneEmpty(), Changes: shadow.pending}
+		event := Event{Name: "res-sync", Tag: "srv01", SID: sess.id, Res: res.Ref(), Changes: shadow.pending}
 		sess.taglib[res.StringID()] = event.Tag
 		if !sess.push_client(event) {
 			// client went offline, stop for now
@@ -242,7 +242,7 @@ func (sess *Session) handle_sync(event Event) {
 		// edge-case happened: client sent request and disconnected before we
 		// could response. set tainted state for resource.
 		log.Printf("session[%s]: client went offline during sync. taint resource (%s) for later flush", sess.id, event.Res.StringID())
-		sess.tainted.Add(event.Res.CloneEmpty())
+		sess.tainted.Add(event.Res.Ref())
 	}
 	// note: the following should probably already happen at the resource
 	// store layer (i.e. sending taint packets with patch.origin_sid as event.sid
@@ -253,17 +253,17 @@ func (sess *Session) handle_sync(event Event) {
 	// the origin), but we already updated the tainted registry above
 	// on the next client-message the change will be flushed
 
-	//notify <- Event{Name: "res-taint", SID: sess.id, Res: &event.Res.CloneEmpty()}
+	//notify <- Event{Name: "res-taint", SID: sess.id, Res: &event.Res.Ref()}
 	return
 }
 
 func (sess *Session) handle_taint(event Event) {
 	log.Printf("session[%s]: handling taint event for %s, all tainted: %s", sess.id, event.Res, sess.tainted)
-	sess.tainted.Add(event.Res.CloneEmpty())
+	sess.tainted.Add(event.Res.Ref())
 	log.Printf("session[%s]:  all tainted: %s", sess.id, sess.tainted)
 }
 func (sess *Session) handle_reset(event Event) {
-	sess.reset.Add(event.Res.CloneEmpty())
+	sess.reset.Add(event.Res.Ref())
 }
 
 func (s *Session) MarshalJSON() ([]byte, error) {

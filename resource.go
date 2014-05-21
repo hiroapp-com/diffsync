@@ -1,6 +1,5 @@
 package diffsync
 
-// TODO(flo): Rename CloneEmpty to Ref()
 // TODO(flo): Rename StringID to StringRef()
 
 import (
@@ -24,7 +23,7 @@ func NewResource(kind, id string) Resource {
 	return Resource{Kind: kind, ID: id}
 }
 
-func (res *Resource) CloneEmpty() Resource {
+func (res *Resource) Ref() Resource {
 	return Resource{Kind: res.Kind, ID: res.ID}
 }
 

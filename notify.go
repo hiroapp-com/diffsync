@@ -17,7 +17,7 @@ type SubscriberChecker interface {
 func (sub Subscription) CloneFor(sid, uid string) Subscription {
 	// todo make sure we canuse `sub` for this
 	log.Println("WWWOOOPP", sub, sid, uid)
-	return Subscription{sid: sid, uid: uid, res: sub.res.CloneEmpty()}
+	return Subscription{sid: sid, uid: uid, res: sub.res.Ref()}
 }
 
 type NotifyListener chan Event
