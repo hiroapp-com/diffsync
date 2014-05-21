@@ -22,7 +22,7 @@ func NewStore(kind string, backend StoreBackend, notify chan<- Event) *Store {
 }
 
 func (store *Store) Load(res *Resource) error {
-	log.Printf("resource[%s:%p]: loading data", res.StringID(), res)
+	log.Printf("resource[%s:%p]: loading data", res.StringRef(), res)
 	// todo: send get request via gdata connection
 	value, err := store.backend.Get(res.ID)
 	if err != nil {

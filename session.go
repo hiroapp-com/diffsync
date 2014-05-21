@@ -80,7 +80,7 @@ func NewSession(uid string) *Session {
 func (sess *Session) diff_resources(check []Resource) []Resource {
 	news := make([]Resource, 0, len(check))
 	for _, res := range check {
-		if _, exists := sess.shadows[res.StringID()]; !exists {
+		if _, exists := sess.shadows[res.StringRef()]; !exists {
 			news = append(news, res)
 		}
 	}
@@ -141,7 +141,7 @@ func (sess *Session) flush() {
 			log.Println("received illegal resource kind:", res.Kind)
 			return
 		}
-		shadow, ok := sess.shadows[res.StringID()]
+		shadow, ok := sess.shadows[res.StringRef()]
 		if !ok {
 			log.Println("shadow not found, cannot sync", res, sess.shadows)
 			return
@@ -151,7 +151,7 @@ func (sess *Session) flush() {
 		sess.tainted.Remove(res.Ref())
 		// TODO(flo) proper tag handling
 		event := Event{Name: "res-sync", Tag: "srv01", SID: sess.id, Res: res.Ref(), Changes: shadow.pending}
-		sess.taglib[res.StringID()] = event.Tag
+		sess.taglib[res.StringRef()] = event.Tag
 		if !sess.push_client(event) {
 			// client went offline, stop for now
 			log.Printf("session[%s]: client went offline during flush. aborting", sess.id)
@@ -206,7 +206,7 @@ func (sess *Session) handle_sync(event Event) {
 	// taglib indicates a pending tag. It will ignore the tag (and its own
 	// cycle) and process like a regular client-side-sync(css). (don't forget to
 	// update taglib in the end
-	shadow, ok := sess.shadows[event.Res.StringID()]
+	shadow, ok := sess.shadows[event.Res.StringRef()]
 	if !ok {
 		log.Println("shadow not found, cannot sync", event.Res, sess.shadows)
 		return
@@ -223,9 +223,9 @@ func (sess *Session) handle_sync(event Event) {
 		}
 	}
 	// cleanup tag
-	defer delete(sess.taglib, event.Res.StringID())
+	defer delete(sess.taglib, event.Res.StringRef())
 	// check event-tag
-	if mytag, ok := sess.taglib[event.Res.StringID()]; ok && mytag == event.Tag {
+	if mytag, ok := sess.taglib[event.Res.StringRef()]; ok && mytag == event.Tag {
 		//received a response to a server-side-sync(sss) cycle
 		// we're all done!
 		// note this relies on the fact that during sync-incoming, appropriate
@@ -241,7 +241,7 @@ func (sess *Session) handle_sync(event Event) {
 	if !sess.push_client(event) {
 		// edge-case happened: client sent request and disconnected before we
 		// could response. set tainted state for resource.
-		log.Printf("session[%s]: client went offline during sync. taint resource (%s) for later flush", sess.id, event.Res.StringID())
+		log.Printf("session[%s]: client went offline during sync. taint resource (%s) for later flush", sess.id, event.Res.StringRef())
 		sess.tainted.Add(event.Res.Ref())
 	}
 	// note: the following should probably already happen at the resource

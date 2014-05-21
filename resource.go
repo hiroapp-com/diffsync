@@ -1,7 +1,5 @@
 package diffsync
 
-// TODO(flo): Rename StringID to StringRef()
-
 import (
 	"fmt"
 )
@@ -27,7 +25,7 @@ func (res *Resource) Ref() Resource {
 	return Resource{Kind: res.Kind, ID: res.ID}
 }
 
-func (res *Resource) StringID() string {
+func (res *Resource) StringRef() string {
 	return fmt.Sprintf("%s:%s", res.Kind, res.ID)
 }
 

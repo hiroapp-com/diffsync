@@ -30,12 +30,12 @@ func (shadow *Shadow) Rollback() {
 
 func (shadow *Shadow) UpdatePending(store *Store) error {
 	res := shadow.res.Ref()
-	log.Printf("shadow[%s:%p]: calculating new delta and upate pending-queue\n", res.StringID(), &res)
+	log.Printf("shadow[%s:%p]: calculating new delta and upate pending-queue\n", res.StringRef(), &res)
 	_ = store.Load(&res)
-	log.Printf("shadow[%s:%p]: current mastertext: `%s`\n", res.StringID(), &res, res.Value)
-	log.Printf("shadow[%s:%p]: current shadowtext: `%s`\n", shadow.res.StringID(), &shadow.res, shadow.res.Value)
+	log.Printf("shadow[%s:%p]: current mastertext: `%s`\n", res.StringRef(), &res, res.Value)
+	log.Printf("shadow[%s:%p]: current shadowtext: `%s`\n", shadow.res.StringRef(), &shadow.res, shadow.res.Value)
 	delta := shadow.res.Value.GetDelta(res.Value)
-	log.Printf("shadow[%s:%p]: found delta: `%s`\n", res.StringID(), &res, delta)
+	log.Printf("shadow[%s:%p]: found delta: `%s`\n", res.StringRef(), &res, delta)
 	shadow.pending = append(shadow.pending, Edit{shadow.SessionClock.Clone(), delta})
 	shadow.IncSv()
 	shadow.res = res
@@ -44,7 +44,7 @@ func (shadow *Shadow) UpdatePending(store *Store) error {
 
 func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err error) {
 	// Make sure clocks are in sync or recoverable
-	log.Printf("shadow[%s:%p]: sync incoming edit: `%v`\n", shadow.res.StringID(), &shadow.res, edit)
+	log.Printf("shadow[%s:%p]: sync incoming edit: `%v`\n", shadow.res.StringRef(), &shadow.res, edit)
 	if err := shadow.SessionClock.SyncSvWith(edit.Clock, shadow); err != nil {
 		return false, err
 	}
