@@ -33,7 +33,7 @@ func (mem *NoteMemBackend) Get(key string) (ResourceValue, error) {
 	}
 	// tbd: should the (blank) resource already be created or can we wait for the
 	//      Upsert to happen later?
-	return noteval.CloneValue(), nil
+	return noteval.Clone(), nil
 }
 
 func (mem *NoteMemBackend) GetMany(keys []string) ([]ResourceValue, error) {
@@ -68,7 +68,7 @@ func (mem *NoteMemBackend) Delete(key string) error {
 func (mem *NoteMemBackend) DumpAll(kind string) []Resource {
 	res := make([]Resource, 0, len(mem.dict))
 	for id, val := range mem.dict {
-		res = append(res, Resource{Kind: kind, ID: id, Value: val.CloneValue()})
+		res = append(res, Resource{Kind: kind, ID: id, Value: val.Clone()})
 	}
 	return res
 }

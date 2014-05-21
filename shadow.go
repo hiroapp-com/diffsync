@@ -17,7 +17,7 @@ func NewShadow(res Resource, sid string) *Shadow {
 	return &Shadow{
 		sid:          sid,
 		res:          res,
-		backup:       res.Value.CloneValue(),
+		backup:       res.Value.Clone(),
 		pending:      []Edit{},
 		SessionClock: SessionClock{},
 	}

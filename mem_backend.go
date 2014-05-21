@@ -25,7 +25,7 @@ func (mem *MemBackend) Get(key string) (ResourceValue, error) {
 	}
 	// tbd: should the (blank) resource already be created or can we wait for the
 	//      Upsert to happen later?
-	return val.CloneValue(), nil
+	return val.Clone(), nil
 }
 
 func (mem *MemBackend) GetMany(keys []string) ([]ResourceValue, error) {
@@ -43,7 +43,7 @@ func (mem *MemBackend) GetMany(keys []string) ([]ResourceValue, error) {
 func (mem *MemBackend) Upsert(key string, val ResourceValue) error {
 	mem.Lock()
 	defer mem.Unlock()
-	mem.Dict[key] = val.CloneValue()
+	mem.Dict[key] = val.Clone()
 	return nil
 }
 
@@ -57,7 +57,7 @@ func (mem *MemBackend) Delete(key string) error {
 func (mem *MemBackend) DumpAll(kind string) []Resource {
 	res := make([]Resource, 0, len(mem.Dict))
 	for id, val := range mem.Dict {
-		res = append(res, Resource{Kind: kind, ID: id, Value: val.CloneValue()})
+		res = append(res, Resource{Kind: kind, ID: id, Value: val.Clone()})
 	}
 	return res
 }

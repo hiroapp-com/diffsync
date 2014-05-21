@@ -31,7 +31,7 @@ func NewNote(text string) Note {
 	return Note{Text: TextValue(text), CreatedAt: time.Now(), Tribe: []TribeMember{}}
 }
 
-func (note Note) CloneValue() ResourceValue {
+func (note Note) Clone() ResourceValue {
 	return note
 }
 
@@ -89,7 +89,7 @@ type notePatch struct {
 func (patch notePatch) Patch(val ResourceValue, notify chan<- Event) (ResourceValue, error) {
 	var err error
 	note := val.(Note)
-	newnote := note.CloneValue().(Note)
+	newnote := note.Clone().(Note)
 	switch patch.property {
 	case "text":
 		txtpatch, ok := patch.payload.(textPatch)
@@ -144,7 +144,7 @@ func (delta NoteDelta) HasChanges() bool {
 
 func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {
 	original, ok := to.(Note)
-	newres := original.CloneValue().(Note)
+	newres := original.Clone().(Note)
 	if !ok {
 		return nil, nil, errors.New("cannot apply NoteDelta to non Note")
 	}

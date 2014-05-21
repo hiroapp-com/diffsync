@@ -31,7 +31,7 @@ func (store *Store) Load(res *Resource) error {
 	// for now we can ignore the exists flag. if it's a new note, here we'll return a blank/initialized value
 	// which is the desired case (behaviour needs more documentation). Also the patch matchod will easily
 	// make use of the same feature
-	res.Value = value.CloneValue()
+	res.Value = value.Clone()
 	return nil
 }
 

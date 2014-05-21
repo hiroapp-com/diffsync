@@ -1,6 +1,5 @@
 package diffsync
 
-// TODO(flo): Rename CloneValue to Clone()
 // TODO(flo): Rename CloneEmpty to Ref()
 // TODO(flo): Rename StringID to StringRef()
 
@@ -10,7 +9,7 @@ import (
 
 type ResourceValue interface {
 	GetDelta(ResourceValue) Delta
-	CloneValue() ResourceValue
+	Clone() ResourceValue
 	fmt.Stringer
 }
 

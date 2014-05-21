@@ -37,7 +37,7 @@ func (ref *NoteRef) setStatus(from, to string) {
 
 type Folio []NoteRef
 
-func (folio Folio) CloneValue() ResourceValue {
+func (folio Folio) Clone() ResourceValue {
 	f := make(Folio, len(folio))
 	copy(f, folio)
 	return f
@@ -72,7 +72,7 @@ func NewFolioDelta() FolioDelta {
 
 func (delta FolioDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {
 	log.Printf("received Folio-Delta: %#v", delta)
-	folio := to.CloneValue().(Folio)
+	folio := to.Clone().(Folio)
 	for i := range delta.Removals {
 		folio.remove(delta.Removals[i])
 	}
@@ -95,7 +95,7 @@ func (delta FolioDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error
 
 func (patch FolioDelta) Patch(to ResourceValue, notify chan<- Event) (ResourceValue, error) {
 	log.Printf("received Folio-Patch: %#v", patch)
-	folio := to.CloneValue().(Folio)
+	folio := to.Clone().(Folio)
 	for i := range patch.Removals {
 		// remove is idempodent anyways, no need to check whether it existed or not
 		folio.remove(patch.Removals[i])
