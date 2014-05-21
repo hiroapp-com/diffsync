@@ -53,12 +53,12 @@ func (store *Store) NotifyTaint(id string, sid string) {
 	}
 }
 
-func (store *Store) Patch(res *Resource, patch Patch, sid string) error {
+func (store *Store) Patch(res *Resource, patch Patcher, sid string) error {
 	value, err := store.backend.Get(res.ID)
 	if err != nil {
 		return err
 	}
-	newval, err := patch.Apply(value, store.notify)
+	newval, err := patch.Patch(value, store.notify)
 	if err != nil {
 		return err
 	}

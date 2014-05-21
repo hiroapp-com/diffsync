@@ -44,8 +44,7 @@ func (shadow *Shadow) UpdatePending(store *Store) error {
 
 func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err error) {
 	// Make sure clocks are in sync or recoverable
-	log.Println(edit)
-	log.Println(shadow)
+	log.Printf("shadow[%s:%p]: sync incoming edit: `%v`\n", shadow.res.StringID(), &shadow.res, edit)
 	if err := shadow.SessionClock.SyncSvWith(edit.Clock, shadow); err != nil {
 		return false, err
 	}

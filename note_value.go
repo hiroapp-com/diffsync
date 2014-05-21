@@ -86,7 +86,7 @@ type notePatch struct {
 }
 
 // maybe notify should be a global chan
-func (patch notePatch) Apply(val ResourceValue, notify chan<- Event) (ResourceValue, error) {
+func (patch notePatch) Patch(val ResourceValue, notify chan<- Event) (ResourceValue, error) {
 	var err error
 	note := val.(Note)
 	newnote := note.CloneValue().(Note)
@@ -96,7 +96,7 @@ func (patch notePatch) Apply(val ResourceValue, notify chan<- Event) (ResourceVa
 		if !ok {
 			return nil, errors.New("invalid textPatch received")
 		}
-		newtxt, err := txtpatch.Apply(note.Text, notify)
+		newtxt, err := txtpatch.Patch(note.Text, notify)
 		if err != nil {
 			return nil, err
 		}
@@ -142,7 +142,7 @@ func (delta NoteDelta) HasChanges() bool {
 	return false
 }
 
-func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patch, error) {
+func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {
 	original, ok := to.(Note)
 	newres := original.CloneValue().(Note)
 	if !ok {
@@ -150,7 +150,7 @@ func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patch, error) {
 	}
 	var err error
 	var tmptxt ResourceValue
-	patches := []Patch{}
+	patches := []Patcher{}
 	if delta.Text.HasChanges() {
 		tmptxt, patches, err = delta.Text.Apply(original.Text)
 		if err != nil {

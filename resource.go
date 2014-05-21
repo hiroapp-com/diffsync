@@ -5,14 +5,12 @@ package diffsync
 // TODO(flo): Rename StringID to StringRef()
 
 import (
-	"encoding/json"
 	"fmt"
 )
 
 type ResourceValue interface {
 	GetDelta(ResourceValue) Delta
 	CloneValue() ResourceValue
-	json.Marshaler
 	fmt.Stringer
 }
 

@@ -54,7 +54,7 @@ func (note *TextValue) UnmarshalJSON(from []byte) error {
 	return nil
 }
 
-func (patch textPatch) Apply(val ResourceValue, notify chan<- Event) (ResourceValue, error) {
+func (patch textPatch) Patch(val ResourceValue, notify chan<- Event) (ResourceValue, error) {
 	original := val.(TextValue)
 	patched, _ := dmp.PatchApply([]DMP.Patch(patch), string(original))
 	return TextValue(patched), nil
@@ -68,7 +68,7 @@ func (delta TextDelta) HasChanges() bool {
 	return string(delta)[0] != '=' || len(strings.SplitN(string(delta), "\n", 2)) > 1
 }
 
-func (delta TextDelta) Apply(to ResourceValue) (ResourceValue, []Patch, error) {
+func (delta TextDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {
 	original, ok := to.(TextValue)
 	if !ok {
 		return nil, nil, errors.New("Cannot apply delta to non-TextValue type")
@@ -79,5 +79,5 @@ func (delta TextDelta) Apply(to ResourceValue) (ResourceValue, []Patch, error) {
 	}
 	patch := textPatch(dmp.PatchMake(string(original), diffs))
 	newres := TextValue(dmp.DiffText2(diffs))
-	return newres, []Patch{patch}, nil
+	return newres, []Patcher{patch}, nil
 }
