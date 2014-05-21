@@ -1,280 +1,191 @@
 package diffsync
 
-// Type Folio Supports the following changes:
-//
-//  - Docs
-//   * (c,s) New File Added
-//   * (c) Change Doc status from "active" to "archived"
-//   * (c) Change Doc status from "archived" to "active"
-//
-//  - Settings
-//   * (c) Change Email from $prev to $new
-//   * (c) Change Tel from $prev to $new
-//   * (c) Change Name from $prev to $new
-//   * (s) cange Plan from $old to $new
-
-// changeprop: key
-
-
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
 	"log"
-	"regexp"
-	"time"
+	"strings"
+
+	"encoding/json"
 )
 
-var (
-	validName          = regexp.MustCompile(`^[a-zA-Z0-9 ]+$`)
-	validTel           = regexp.MustCompile(`^[0-9 -\(\)]+$`)
-	validDoclistChange = regexp.MustCompile(`^[+][a-zA-Z0-9]{3,12}$`)  // todo specify actual docid schema
-	validArchiveChange = regexp.MustCompile(`^[+-][a-zA-Z0-9]{3,12}$`) // todo specify actual docid schema
-)
-
-type FolioDelta struct {
-	Props   map[string]string `json:"props,omitempty"`
-	Docs    []string          `json:"docs,omitempty"`
-	Archive []string          `json:"archive,omitempty"`
+type NoteRef struct {
+	NID    string `json:"nid"`
+	Status string `json:"status"`
+	tmpNID string `json:"-"`
 }
 
-func NewFolioDelta() FolioDelta {
-	return FolioDelta{map[string]string{}, []string{}, []string{}}
+func (ref NoteRef) diff(latest NoteRef) (changes [][4]string) {
+	if latest.Status != ref.Status {
+		changes = append(changes, [4]string{ref.NID, "status", ref.Status, latest.Status})
+	}
+	if latest.NID != ref.NID {
+		changes = append(changes, [4]string{ref.NID, "nid", ref.NID, latest.NID})
+	}
+	return
 }
 
-type UserInfo struct {
-	UID      string `json:"uid,omitempty"`
-	Email    string `json:"email,omitempty"`
-	Tel      string `json:"tel,omitempty"`
-	Name     string `json:"name,omitempty"`
-	Token    string `json:"token,omitempty"`
-	signupAt *time.Time
+func (ref *NoteRef) setStatus(from, to string) {
+	if ref.Status != from {
+		return
+	}
+	switch to {
+	case "active":
+		fallthrough
+	case "archive":
+		ref.Status = to
+	}
 }
 
-type Settings struct {
-	Plan         string `json:"plan"`
-	FBUID        string `json:"fb_uid"`
-	stripeCustID string
-	isRoot       bool
-}
+type Folio []NoteRef
 
-type Folio struct {
-	// User contians all information about the Folio-Owner
-	User UserInfo
-
-	// Settings contains the Folio-owner's Account Settings
-	Settings Settings
-
-	// Docs is an unordered Slice containing all the IDs of the documents the User has access to
-	// Each docID in Docs references a document that the folio-owner
-	Docs []string
-
-	// Archive is an unordered Slice containing docIDs of all Documents that are archives
-	// Each element in Archive *must* also be present in Docs. Thus, the elements of
-	// Archive merely reference the elements in Docs and indicate which Documents
-	// should be considered Archived.
-	// The meaninig of being archived needs to be documented more thorougly
-	Archive []string
-}
-
-func NewFolio() *Folio {
-	return new(Folio)
-}
-
-func (folio *Folio) CloneValue() ResourceValue {
-	f := new(Folio)
-	*f = *folio
-	f.Docs = append([]string{}, folio.Docs...)
-	f.Archive = append([]string{}, folio.Archive...)
+func (folio Folio) CloneValue() ResourceValue {
+	f := make(Folio, len(folio))
+	copy(f, folio)
 	return f
 }
 
-func (folio *Folio) AddDoc(docID string) bool {
-	for i := range folio.Docs {
-		if folio.Docs[i] == docID {
-			// already in doclist
-			return false
-		}
-	}
-	folio.Docs = append(folio.Docs, docID)
-	return true
-}
-
-func (folio *Folio) ToArchive(docID string) bool {
-	var found bool
-	for i := range folio.Docs {
-		if folio.Docs[i] == docID {
-			found = true
+func (f *Folio) remove(ref NoteRef) Folio {
+	folio := *f
+	for i := range folio {
+		if folio[i].NID == ref.NID {
+			folio[i] = folio[len(folio)-1]
+			folio = folio[0 : len(folio)-1]
+			*f = folio
 			break
 		}
 	}
-	if !found {
-		// docID is not in Doclist, cannot put it into Archive
-		return false
-	}
-	for i := range folio.Archive {
-		if folio.Archive[i] == docID {
-			// already in archive, noop
-			return false
-		}
-	}
-	folio.Archive = append(folio.Archive, docID)
-	return true
-
+	return folio
 }
 
-func (folio *Folio) UnArchive(docID string) bool {
-	for i := range folio.Archive {
-		if folio.Archive[i] == docID {
-			// swap item to end and truncate Docs-slice
-			folio.Archive[i] = folio.Archive[len(folio.Archive)-1]
-			folio.Archive = folio.Archive[0 : len(folio.Archive)-1]
-			return true
-		}
-	}
-	return false
+type FolioDelta struct {
+	Additions     []NoteRef   `json:"add"`
+	Removals      []NoteRef   `json:"rem"`
+	Modifications [][4]string `json:"mod"` // [id, field, old, new]
 }
 
-func (folio *Folio) ApplyDelta(delta json.RawMessage) (Patch, error) {
-	log.Printf("received (supposedly Folio-)Delta: %#v", delta)
-	fdelta := NewFolioDelta()
-	if err := json.Unmarshal([]byte(delta), &fdelta); err != nil {
-		return Patch{}, errors.New("Invalid Delta for Folio")
-	}
-	log.Println("received delta: ", fdelta)
-	changes := [][3]string{}
-	// Process all property-changes. These are simple s/old/new string-changes
-	var ok bool
-	var newProp string
-	if newProp, ok = fdelta.Props["user.name"]; ok && validName.MatchString(newProp) {
-		folio.User.Name = newProp
-		changes = append(changes, [3]string{"user.name", "set", newProp})
-	}
-	if newProp, ok = fdelta.Props["user.tel"]; ok && validTel.MatchString(newProp) {
-		folio.User.Tel = newProp
-		changes = append(changes, [3]string{"user.tel", "set", newProp})
-	}
-	// Check all changes to the document list.
-	// note that for now only *additions* are supported. Either the server or the client
-	// chan send a newly added doc-id. Neither side will ever promote a "removed" note.
-	// if a client wants to 'remove' a file from his folio, he (currently) archives it
-	for i := range fdelta.Docs {
-		if !validDoclistChange.MatchString(fdelta.Docs[i]) {
-			// skip invalid entry
-			continue
-		}
-		op, docid := fdelta.Docs[i][0], fdelta.Docs[i][1:]
-		if op == '+' && folio.AddDoc(docid) {
-			changes = append(changes, [3]string{"docs", "add", docid})
-		}
-	}
-
-	// Process all changes to the Doc Archive
-	for i := range fdelta.Archive {
-		if !validArchiveChange.MatchString(fdelta.Archive[i]) {
-			// skip invalid entry
-			continue
-		}
-		op, docid := fdelta.Archive[i][0], fdelta.Archive[i][1:]
-		if op == '+' && folio.ToArchive(docid) {
-			changes = append(changes, [3]string{"archive", "add", docid})
-		} else if op == '-' && folio.UnArchive(docid) {
-			changes = append(changes, [3]string{"archive", "rem", docid})
-		}
-	}
-	return Patch{val: changes}, nil
+func (d FolioDelta) HasChanges() bool {
+	return (len(d.Additions) + len(d.Removals) + len(d.Modifications)) > 0
 }
 
-func (folio *Folio) ApplyPatch(patch Patch, notify chan<- Event) (changed bool, err error) {
-	if patch.val == nil {
-		return false, nil
+func NewFolioDelta() FolioDelta {
+	return FolioDelta{}
+}
+
+func (delta FolioDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {
+	log.Printf("received Folio-Delta: %#v", delta)
+	folio := to.CloneValue().(Folio)
+	for i := range delta.Removals {
+		folio.remove(delta.Removals[i])
 	}
-	changes := patch.val.([][3]string)
-	var prop, op, val string
-	for i := range changes {
-		prop, op, val = changes[i][0], changes[i][1], changes[i][2]
-		switch {
-		case prop == "user.name" && op == "set":
-			if val != folio.User.Name {
-				changed = true
-				folio.User.Name = val
+	folio = append(folio, delta.Additions...)
+	mods := map[string][][]string{}
+	for _, mod := range delta.Modifications {
+		mods[mod[0]] = append(mods[mod[0]], mod[1:])
+	}
+	// iterate over all folio's notes and check if delta contains modifications for it
+	for i := range folio {
+		for _, change := range mods[folio[i].NID] {
+			switch change[0] {
+			case "status":
+				folio[i].setStatus(change[1], change[2])
 			}
-		case prop == "user.tel" && op == "set":
-			if val != folio.User.Tel {
-				changed = true
-				folio.User.Tel = val
-			}
-		case prop == "docs" && op == "add":
-			if folio.AddDoc(val) {
-				changed = true
-			}
-		case prop == "archive" && op == "add":
-			if folio.ToArchive(val) {
-				changed = true
-			}
-		case prop == "archive" && op == "rem":
-			if folio.UnArchive(val) {
-				changed = true
-			}
+		}
+	}
+	return folio, []Patcher{to.GetDelta(folio).(FolioDelta)}, nil
+}
+
+func (patch FolioDelta) Patch(to ResourceValue, notify chan<- Event) (ResourceValue, error) {
+	log.Printf("received Folio-Patch: %#v", patch)
+	folio := to.CloneValue().(Folio)
+	for i := range patch.Removals {
+		// remove is idempodent anyways, no need to check whether it existed or not
+		folio.remove(patch.Removals[i])
+	}
+
+	for _, ref := range patch.Additions {
+		switch ref.Status {
+		case "active":
+			fallthrough
+		case "archive":
+			break
 		default:
-			//todo log unsupported patch
+			ref.Status = "active"
+		}
+		//TODO(flo) check store if NID exsist, if not create new one. using custom prefix for now
+		if strings.HasPrefix(ref.NID, "new:") {
+			//TODO(flo): figure out proper client-file creation and payload sending
+			// proper way would be to first let the client send the create event to the folio
+			// and upon receiving a proper NID, it can send all contents and infos as a normal sync event
+			ref.tmpNID = ref.NID
+			ref.NID = generateNID()
+			folio = append(folio, ref)
+			continue
+		}
+		//TODO(flo): check permissions of current session to NID
+		if grantRead("TODO:sid", ref.NID) {
+			folio = append(folio, ref)
+			continue
 		}
 	}
-	return changed, nil
+	mods := map[string][][]string{}
+	for _, mod := range patch.Modifications {
+		mods[mod[0]] = append(mods[mod[0]], mod[1:])
+	}
+	// iterate over all folio's notes and check if delta contains modifications for it
+	for i := range folio {
+		for _, change := range mods[folio[i].NID] {
+			switch change[0] {
+			// also setStatus is idempodent and will only perform the change if old is same as current
+			case "status":
+				folio[i].setStatus(change[1], change[2])
+			}
+		}
+	}
+	return folio, nil
 }
 
-func (folio *Folio) GetDelta(latest ResourceValue) (json.RawMessage, error) {
-	master, ok := latest.(*Folio)
-	if !ok {
-		return nil, fmt.Errorf("received illegal master-value (not of type *Folio) for delta calculation")
-	}
-	// do the delta dance
+func (folio Folio) GetDelta(latest ResourceValue) Delta {
 	delta := NewFolioDelta()
-	if folio.User.Name != master.User.Name {
-		delta.Props["user.name"] = master.User.Name
+	tmp := map[string]NoteRef{}
+	for _, ref := range folio {
+		// fill lookup map with LHS values
+		tmp[ref.NID] = ref
 	}
-	if folio.User.Tel != master.User.Tel {
-		delta.Props["user.tel"] = master.User.Tel
+	for _, ref := range latest.(Folio) {
+		if ref.tmpNID != "" {
+			if r, ok := tmp[ref.tmpNID]; ok {
+				delta.Modifications = append(delta.Modifications, r.diff(ref)...)
+				delete(tmp, ref.tmpNID)
+				continue
+			}
+		}
+		// we expect all refs in latest to have a non-empty NID
+		if r, ok := tmp[ref.NID]; ok {
+			delta.Modifications = append(delta.Modifications, r.diff(ref)...)
+			delete(tmp, ref.NID)
+		} else {
+			delta.Additions = append(delta.Additions, ref)
+		}
 	}
-	if folio.User.UID != master.User.UID {
-		delta.Props["user.uid"] = master.User.UID
+	for k := range tmp {
+		// everything left in tmp was not filtered out before and thus was removed in master
+		delta.Removals = append(delta.Removals, tmp[k])
 	}
-	if folio.User.Email != master.User.Email {
-		delta.Props["user.email"] = master.User.Email
-	}
-	delta.Docs = diffStringSlices(folio.Docs, master.Docs)
-	delta.Archive = diffStringSlices(folio.Archive, master.Archive)
-	return json.Marshal(delta)
+	return delta
 }
 
-func (folio *Folio) String() string {
+func (folio Folio) String() string {
 	s, _ := json.MarshalIndent(folio, "", "  ")
 	return string(s)
 }
 
-func diffStringSlices(old, current []string) []string {
-	diff := []string{}
-	tmp := make(map[string]struct{})
-	for i := range old {
-		tmp[old[i]] = struct{}{}
-	}
-	for i := range current {
-		if _, ok := tmp[current[i]]; ok {
-			delete(tmp, current[i])
-			continue
-		}
-		diff = append(diff, "+"+current[i])
-	}
-	for dropped := range tmp {
-		diff = append(diff, "-"+dropped)
-	}
-	return diff
-}
-
-func (folio *Folio) MarshalJSON() ([]byte, error) {
-	return json.Marshal(*folio)
-}
-
 func (folio *Folio) UnmarshalJSON(from []byte) error {
 	return json.Unmarshal(from, folio)
+}
+
+func generateNID() string {
+	return sid_generate()[:10]
+}
+
+func grantRead(sid, nid string) bool {
+	return true
 }

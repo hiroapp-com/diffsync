@@ -109,6 +109,14 @@ var deltas = map[string]func([]byte) (Delta, error){
 		}
 		return delta, nil
 	},
+	"folio": func(from []byte) (Delta, error) {
+		log.Printf("jsonAdapter: parsing folio delta\n")
+		delta := NewFolioDelta()
+		if err := json.Unmarshal(from, &delta); err != nil {
+			return nil, err
+		}
+		return delta, nil
+	},
 }
 
 func jsonSession(sess *Session) map[string]interface{} {
