@@ -7,6 +7,8 @@ import (
 type MessageAdapter interface {
 	MsgToEvent([]byte) (Event, error)
 	EventToMsg(Event) ([]byte, error)
+	Demux([]byte) ([][]byte, error)
+	Mux([][]byte) ([]byte, error)
 }
 
 type Conn struct {

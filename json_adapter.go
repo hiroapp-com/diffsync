@@ -40,7 +40,6 @@ func (a jsonAdapter) MsgToEvent(from []byte) (Event, error) {
 			if err != nil {
 				return Event{}, err
 			}
-			log.Printf("jsonAdapter: parsed Delta %v\n", d)
 			ev.Changes[i] = Edit{c.Clock, d}
 		}
 	}
@@ -79,6 +78,28 @@ func (a jsonAdapter) EventToMsg(ev Event) ([]byte, error) {
 	return json.Marshal(a.buf)
 }
 
+func (a jsonAdapter) Mux(msgs [][]byte) ([]byte, error) {
+	res := []byte("[")
+	for i := range msgs {
+		res = append(res, msgs[i]...)
+		res = append(res, byte(','))
+	}
+	res[len(res)-1] = byte(']')
+	return res, nil
+}
+
+func (a jsonAdapter) Demux(msg []byte) ([][]byte, error) {
+	tmp := []json.RawMessage{}
+	if err := json.Unmarshal(msg, &tmp); err != nil {
+		return nil, err
+	}
+	res := make([][]byte, len(tmp))
+	for i := range tmp {
+		res[i] = []byte(tmp[i])
+	}
+	return res, nil
+}
+
 type jsonEdit struct {
 	Clock    SessionClock    `json:"clock"`
 	RawDelta json.RawMessage `json:"delta"`
@@ -107,6 +128,7 @@ var deltas = map[string]func([]byte) (Delta, error){
 		if err := json.Unmarshal(from, &delta); err != nil {
 			return nil, err
 		}
+		log.Println("jsonAdapter: parsed note delta", delta)
 		return delta, nil
 	},
 	"folio": func(from []byte) (Delta, error) {
