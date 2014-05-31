@@ -2,6 +2,7 @@ package diffsync
 
 import (
 	"log"
+	"time"
 )
 
 type SessionHub struct {
@@ -26,8 +27,14 @@ func (hub *SessionHub) Inbox() chan<- Event {
 	return hub.inbox
 }
 
+func (hub *SessionHub) logEvent(event Event) {
+	//TODO(flo) write event to some persistent datastore
+	// in case of a server crash or restart, this log will
+	// be used to replay any unhandled events.
+	log.Printf("event-log: received %v\n", event)
+}
+
 func (hub *SessionHub) route(sid string, event Event) error {
-	log.Printf("sessionhub: routing event for sid %s", sid)
 	inbox, ok := hub.active[sid]
 	if !ok {
 		// if not already running, load from datastore and spawn runner
@@ -54,15 +61,15 @@ func (hub *SessionHub) route(sid string, event Event) error {
 			}
 			session.stores = hub.stores
 			for event := range newinbox {
-				cpy := event
-				session.Handle(cpy)
+				session.Handle(event)
 			}
 			log.Println("sessionid: shutting down inbox runner for sid ", sid)
 		}()
 		hub.active[sid] = newinbox
 		inbox = newinbox
 	}
-	log.Println("sessionhub: sending event to session", event)
+	log.Println("sessionhub: route event to session", event)
+	// TODO(flo) handle panic from chan send in case the inbox shut down in the meanwhile!
 	inbox <- event
 	return nil
 }
@@ -95,7 +102,8 @@ func (hub *SessionHub) Run() {
 				//inbox closed, shutdown requested
 				return
 			}
-			log.Printf("sessionhub: received: event (%s:%s)", event.SID, event.Name)
+			event.ctx = context{sid: event.SID, timestamp: time.Now()}
+			hub.logEvent(event)
 			hub.route(event.SID, event)
 		}
 	}

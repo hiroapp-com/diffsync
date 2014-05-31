@@ -72,8 +72,10 @@ type Event struct {
 	// a new incoming Event.client will overwrite also existing (and maybe still
 	// living) client.
 	client chan<- Event
+
+	ctx context
 }
 
 func NewEvent() Event {
-	return Event{Changes: []Edit{}, Res: Resource{}, Session: nil}
+	return Event{Changes: []Edit{}, Res: Resource{}, Session: nil, ctx: context{}}
 }
