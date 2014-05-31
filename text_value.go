@@ -65,7 +65,7 @@ func (delta TextDelta) HasChanges() bool {
 	if string(delta) == "" {
 		return false
 	}
-	return string(delta)[0] != '=' || len(strings.SplitN(string(delta), "\n", 2)) > 1
+	return string(delta)[0] != '=' || len(strings.SplitN(string(delta), "\t", 2)) > 1
 }
 
 func (delta TextDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {

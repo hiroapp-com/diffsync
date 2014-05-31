@@ -62,6 +62,7 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err e
 		return false, err
 	}
 	if !edit.Delta.HasChanges() {
+		shadow.IncCv()
 		return false, nil
 	}
 	newres, patches, err := edit.Delta.Apply(shadow.res.Value)
