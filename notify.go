@@ -29,8 +29,7 @@ func (notify NotifyListener) Run(subs SubscriberChecker, sesshub chan<- Event) {
 	for event := range notify {
 		log.Println("notify: received", event)
 		switch event.Name {
-		case "res-taint":
-		case "res-reset":
+		case "res-taint", "res-reset":
 			break
 		default:
 			log.Printf("notify: received event that i cannot handle (name: `%s`), doing nothing.", event.Name)
