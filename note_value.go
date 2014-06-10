@@ -14,14 +14,6 @@ var (
 	_ = log.Print
 )
 
-type User struct {
-	UID   string `json:"uid,omitempty"`
-	Name  string `json:"name,omitempty"`
-	Email string `json:"email,omitempty"`
-	Phone string `json:"phone,omitempty"`
-	Token string `json:"token,omitempty"`
-}
-
 type Note struct {
 	Title     string    `json:"title"`
 	Text      TextValue `json:"text"`
@@ -154,7 +146,7 @@ func (patch notePatch) Patch(val ResourceValue, notify chan<- Event) (ResourceVa
 			// TODO(flo) user.inviteToNote(note, context),
 			// actually sending out the invite by the means possible and depending if user is signed up or not
 			newnote.Peers = append(newnote.Peers, Peer{User: user, Role: "invited"})
-			// TODO(flo): add user to requestor's Contacts
+			// TODO(flo): add user to requestor's Contacts and send tainted event
 		case "set-cursor":
 			if idx, ok := indexOfPeer(delta.Path, newnote.Peers); ok {
 				//TODO(flo) check newnote.Peers[idx].User == context.User
@@ -193,9 +185,7 @@ func (pd *PeerDelta) UnmarshalJSON(from []byte) (err error) {
 	pd.Op = tmp.Op
 	pd.Path = tmp.Path
 	switch tmp.Op {
-	case "swap-user":
-		fallthrough
-	case "invite":
+	case "swap-user", "invite":
 		u := User{}
 		if err = json.Unmarshal(tmp.RawValue, &u); err == nil {
 			pd.Value = u
@@ -288,25 +278,6 @@ func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error)
 // these functions will be fleshed out and possibly put somewhere else, as soon as we have the proper DB logic
 func stringPtr(s string) *string {
 	return &s
-}
-
-func generateUID() string {
-	return sid_generate()[:8]
-}
-
-func getOrCreateUser(user *User) (created bool, err error) {
-	if user.Email != "" {
-		// TODO(flo): lookup user by email in DB
-		user.UID = generateUID()
-		// TODO(flo): persist to db
-		return true, nil
-	} else if user.Phone != "" {
-		// TODO(flo): lookup user by email in DB
-		user.UID = generateUID()
-		// TODO(flo): persist to db
-		return true, nil
-	}
-	return false, fmt.Errorf("unreachable?")
 }
 
 func indexOfPeer(path string, peers []Peer) (idx int, found bool) {

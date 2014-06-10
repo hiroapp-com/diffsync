@@ -75,8 +75,15 @@ func (hirotok *HiroTokens) Consume(token_key string, sid string) (string, error)
 	if session == nil {
 		// create session
 		session = NewSession(token.UserID)
-		modified = true
+		// TODO(flo) implement profile loading for anon/token users
+		profile := Resource{Kind: "profile", ID: token.UserID}
+		err := hirotok.stores["profile"].Load(&profile)
+		if err != nil {
+			return "", err
+		}
+		session.shadows[profile.StringRef()] = NewShadow(profile, session.id)
 		log.Printf("created new Session `%s`", session.id)
+		modified = true
 	}
 	var store *Store
 	for _, res := range session.diff_resources(token.Resources) {

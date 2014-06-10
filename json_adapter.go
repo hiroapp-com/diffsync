@@ -139,14 +139,25 @@ var deltas = map[string]func([]byte) (Delta, error){
 		}
 		return delta, nil
 	},
+	"profile": func(from []byte) (Delta, error) {
+		log.Printf("jsonAdapter: parsing profile delta\n")
+		delta := ProfileDelta{}
+		if err := json.Unmarshal(from, &delta); err != nil {
+			return nil, err
+		}
+		return delta, nil
+	},
 }
 
 func jsonSession(sess *Session) map[string]interface{} {
 	folio := Resource{}
+	profile := Resource{}
 	notes := make(map[string]*Resource)
 
 	for _, shadow := range sess.shadows {
 		switch shadow.res.Kind {
+		case "profile":
+			profile = shadow.res
 		case "folio":
 			folio = shadow.res
 		case "note":
@@ -156,9 +167,10 @@ func jsonSession(sess *Session) map[string]interface{} {
 
 	}
 	return map[string]interface{}{
-		"sid":   sess.id,
-		"uid":   sess.uid,
-		"folio": folio,
-		"notes": notes,
+		"sid":     sess.id,
+		"uid":     sess.uid,
+		"profile": profile,
+		"folio":   folio,
+		"notes":   notes,
 	}
 }
