@@ -10,7 +10,7 @@ type Delta interface {
 }
 
 type Patcher interface {
-	Patch(ResourceValue, chan<- Event) (ResourceValue, error)
+	Patch(ResourceValue, *Store) (ResourceValue, error)
 }
 
 type Edit struct {

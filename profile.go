@@ -129,7 +129,7 @@ func (prof Profile) GetDelta(latest ResourceValue) Delta {
 	return delta
 }
 
-func (patch UserChange) Patch(val ResourceValue, notify chan<- Event) (ResourceValue, error) {
+func (patch UserChange) Patch(val ResourceValue, store *Store) (ResourceValue, error) {
 	profile := val.(Profile)
 	newProfile := profile.Clone().(Profile)
 	switch patch.Op {
@@ -189,11 +189,11 @@ func (delta ProfileDelta) HasChanges() bool {
 
 func (delta ProfileDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {
 	original, ok := to.(Profile)
-	newres := original.Clone().(Profile)
-	patches := []Patcher{}
 	if !ok {
 		return nil, nil, errors.New("cannot apply ProfileDelta to non Profile resource")
 	}
+	newres := original.Clone().(Profile)
+	patches := []Patcher{}
 	for _, diff := range delta {
 		switch diff.Op {
 		case "add-user":

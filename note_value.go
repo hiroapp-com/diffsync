@@ -112,8 +112,7 @@ type notePatch struct {
 	payload  interface{}
 }
 
-// maybe notify should be a global chan
-func (patch notePatch) Patch(val ResourceValue, notify chan<- Event) (ResourceValue, error) {
+func (patch notePatch) Patch(val ResourceValue, store *Store) (ResourceValue, error) {
 	var err error
 	note := val.(Note)
 	newnote := note.Clone().(Note)
@@ -123,7 +122,7 @@ func (patch notePatch) Patch(val ResourceValue, notify chan<- Event) (ResourceVa
 		if !ok {
 			return nil, errors.New("invalid textPatch received")
 		}
-		newtxt, err := txtpatch.Patch(note.Text, notify)
+		newtxt, err := txtpatch.Patch(note.Text, store)
 		if err != nil {
 			return nil, err
 		}
