@@ -1,7 +1,6 @@
 package diffsync
 
 import (
-	"fmt"
 	"log"
 
 	"encoding/json"
