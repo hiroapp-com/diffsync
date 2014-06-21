@@ -1,8 +1,8 @@
 package diffsync
 
 import (
+	"fmt"
 	"log"
-	"strings"
 
 	"encoding/json"
 )
@@ -13,34 +13,18 @@ type NoteRef struct {
 	tmpNID string `json:"-"`
 }
 
+type FolioChange struct {
+	Op    string      `json:"op"`
+	Path  string      `json:"path"`
+	Value interface{} `json:"value,omitempty"`
+}
+
+type Folio []NoteRef
+type FolioDelta []FolioChange
 
 func (folio Folio) Empty() ResourceValue {
 	return Folio{}
 }
-
-func (ref NoteRef) diff(latest NoteRef) (changes [][4]string) {
-	if latest.Status != ref.Status {
-		changes = append(changes, [4]string{ref.NID, "status", ref.Status, latest.Status})
-	}
-	if latest.NID != ref.NID {
-		changes = append(changes, [4]string{ref.NID, "nid", ref.NID, latest.NID})
-	}
-	return
-}
-
-func (ref *NoteRef) setStatus(from, to string) {
-	if ref.Status != from {
-		return
-	}
-	switch to {
-	case "active":
-		fallthrough
-	case "archive":
-		ref.Status = to
-	}
-}
-
-type Folio []NoteRef
 
 func (folio Folio) Clone() ResourceValue {
 	f := make(Folio, len(folio))
@@ -48,132 +32,169 @@ func (folio Folio) Clone() ResourceValue {
 	return f
 }
 
-func (f *Folio) remove(ref NoteRef) Folio {
-	folio := *f
-	for i := range folio {
-		if folio[i].NID == ref.NID {
-			folio[i] = folio[len(folio)-1]
-			folio = folio[0 : len(folio)-1]
-			*f = folio
-			break
-		}
+func (f *Folio) remove(path string) Folio {
+	i, ok := f.indexFromPath(path)
+	if !ok {
+		return *f
 	}
+	folio := *f
+	folio[i] = folio[len(folio)-1]
+	folio = folio[0 : len(folio)-1]
+	*f = folio
 	return folio
 }
 
-type FolioDelta struct {
-	Additions     []NoteRef   `json:"add"`
-	Removals      []NoteRef   `json:"rem"`
-	Modifications [][4]string `json:"mod"` // [id, field, old, new]
+func (f Folio) indexFromPath(path string) (int, bool) {
+	if path[:4] != "nid:" {
+		// for now, only nid entries may be searched
+		return 0, false
+	}
+	for i := range f {
+		if f[i].NID == path[4:] || f[i].tmpNID == path[4:] {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func (d FolioDelta) HasChanges() bool {
-	return (len(d.Additions) + len(d.Removals) + len(d.Modifications)) > 0
-}
-
-func NewFolioDelta() FolioDelta {
-	return FolioDelta{}
+	return len(d) > 0
 }
 
 func (delta FolioDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {
 	log.Printf("received Folio-Delta: %#v", delta)
+	patches := []Patcher{}
 	folio := to.Clone().(Folio)
-	for i := range delta.Removals {
-		folio.remove(delta.Removals[i])
-	}
-	folio = append(folio, delta.Additions...)
-	mods := map[string][][]string{}
-	for _, mod := range delta.Modifications {
-		mods[mod[0]] = append(mods[mod[0]], mod[1:])
-	}
-	// iterate over all folio's notes and check if delta contains modifications for it
-	for i := range folio {
-		for _, change := range mods[folio[i].NID] {
-			switch change[0] {
-			case "status":
-				folio[i].setStatus(change[1], change[2])
+	for _, change := range delta {
+		switch change.Op {
+		case "add-noteref":
+			folio = append(folio, change.Value.(NoteRef))
+		case "rem-noteref":
+			folio.remove(change.Path)
+		//case "swap-noteref": break // only sent by server, never received
+		case "set-status":
+			if change.Path[:4] != "nid:" {
+				continue
 			}
+			if i, ok := folio.indexFromPath(change.Path); ok {
+				folio[i].Status = change.Value.(string)
+			}
+		default:
+			// don't add to patches, we didn't understand the action anyways
+			continue
 		}
+		patches = append(patches, change)
 	}
-	return folio, []Patcher{to.GetDelta(folio).(FolioDelta)}, nil
+	return folio, patches, nil
 }
 
-func (patch FolioDelta) Patch(to ResourceValue, notify chan<- Event) (ResourceValue, error) {
+func (patch FolioChange) Patch(to ResourceValue, store *Store) (ResourceValue, error) {
 	log.Printf("received Folio-Patch: %#v", patch)
 	folio := to.Clone().(Folio)
-	for i := range patch.Removals {
-		// remove is idempodent anyways, no need to check whether it existed or not
-		folio.remove(patch.Removals[i])
-	}
-
-	for _, ref := range patch.Additions {
-		switch ref.Status {
-		case "active":
-			fallthrough
-		case "archive":
-			break
-		default:
-			ref.Status = "active"
-		}
-		//TODO(flo) check store if NID exsist, if not create new one. using custom prefix for now
-		if strings.HasPrefix(ref.NID, "new:") {
-			//TODO(flo): figure out proper client-file creation and payload sending
-			// proper way would be to first let the client send the create event to the folio
-			// and upon receiving a proper NID, it can send all contents and infos as a normal sync event
-			ref.tmpNID = ref.NID
-			ref.NID = generateNID()
-			folio = append(folio, ref)
-			continue
-		}
-		//TODO(flo): check permissions of current session to NID
-		if grantRead("TODO:sid", ref.NID) {
-			folio = append(folio, ref)
-			continue
-		}
-	}
-	mods := map[string][][]string{}
-	for _, mod := range patch.Modifications {
-		mods[mod[0]] = append(mods[mod[0]], mod[1:])
-	}
-	// iterate over all folio's notes and check if delta contains modifications for it
-	for i := range folio {
-		for _, change := range mods[folio[i].NID] {
-			switch change[0] {
-			// also setStatus is idempodent and will only perform the change if old is same as current
-			case "status":
-				folio[i].setStatus(change[1], change[2])
+	switch patch.Op {
+	case "rem-noteref":
+		folio.remove(patch.Path)
+	case "set-status":
+		switch s := patch.Value.(string); s {
+		case "active", "archived":
+			if i, ok := folio.indexFromPath(patch.Path); ok {
+				folio[i].Status = s
 			}
 		}
+	case "add-noteref":
+		note := patch.Value.(NoteRef)
+		if _, ok := folio.indexFromPath("nid:" + note.NID); ok {
+			// already in our folio,
+			return folio, nil
+		}
+		// TODO(flo) check if note with ID already exists. for no just checking against tmp ids
+		if len(note.NID) < 4 {
+			// save blank note with new NID
+			noteStore := store.OpenNew("note")
+			// TODO(flo) we have to pass the context all the way down to the store, so we know who is the owner
+			res, err := noteStore.CreateEmpty()
+			if err != nil {
+				return nil, err
+			}
+			noteStore.NotifyReset(res.ID)
+			note.tmpNID = note.NID
+			note.NID = res.ID
+		}
+		// TODO(flo) check permissin?
+		folio = append(folio, note)
 	}
 	return folio, nil
 }
 
+func (change *FolioChange) UnmarshalJSON(from []byte) (err error) {
+	tmp := struct {
+		Op       string          `json:"op"`
+		Path     string          `json:"path"`
+		RawValue json.RawMessage `json:"value"`
+	}{}
+	if err = json.Unmarshal(from, &tmp); err != nil {
+		return
+	}
+	change.Op = tmp.Op
+	change.Path = tmp.Path
+	switch tmp.Op {
+	case "add-noteref", "swap-noteref":
+		nr := NoteRef{}
+		if err = json.Unmarshal(tmp.RawValue, &nr); err == nil {
+			change.Value = nr
+		}
+	default:
+		s := ""
+		if err = json.Unmarshal(tmp.RawValue, &s); err == nil {
+			change.Value = s
+		}
+	}
+	return
+}
+
 func (folio Folio) GetDelta(latest ResourceValue) Delta {
-	delta := NewFolioDelta()
-	tmp := map[string]NoteRef{}
-	for _, ref := range folio {
-		// fill lookup map with LHS values
-		tmp[ref.NID] = ref
+	delta := FolioDelta{}
+	master := latest.(Folio)
+
+	oldExisting := map[string]NoteRef{}
+	for _, noteref := range folio {
+		// fill references
+		if noteref.NID != "" {
+			oldExisting[noteref.NID] = noteref
+		} else if noteref.tmpNID != "" {
+			oldExisting[noteref.tmpNID] = noteref
+		}
 	}
-	for _, ref := range latest.(Folio) {
-		if ref.tmpNID != "" {
-			if r, ok := tmp[ref.tmpNID]; ok {
-				delta.Modifications = append(delta.Modifications, r.diff(ref)...)
-				delete(tmp, ref.tmpNID)
-				continue
+	// now check out the current master-version
+	for i := range master {
+		old, ok := oldExisting[master[i].NID]
+		if !ok {
+			old, ok = oldExisting[master[i].tmpNID]
+		}
+		if ok {
+			// already existes in old folio, check differences
+			if len(old.NID) < 4 {
+				// we expect master here to already have the correct NID
+				delta = append(delta, FolioChange{"swap-noteref", "nid:" + old.NID, master[i]})
 			}
+			if old.Status != master[i].Status {
+				delta = append(delta, FolioChange{"set-status", "nid:" + master[i].NID, master[i].Status})
+			}
+			delete(oldExisting, old.NID)
+			delete(oldExisting, old.tmpNID)
+			continue
 		}
-		// we expect all refs in latest to have a non-empty NID
-		if r, ok := tmp[ref.NID]; ok {
-			delta.Modifications = append(delta.Modifications, r.diff(ref)...)
-			delete(tmp, ref.NID)
-		} else {
-			delta.Additions = append(delta.Additions, ref)
-		}
+		// nothing matched, Looks like a new one!
+		cpy := master[i]
+		delta = append(delta, FolioChange{"add-noteref", "", cpy})
 	}
-	for k := range tmp {
-		// everything left in tmp was not filtered out before and thus was removed in master
-		delta.Removals = append(delta.Removals, tmp[k])
+	// remove everything that's left in the bag.
+	for _, old := range oldExisting {
+		if old.NID != "" {
+			delta = append(delta, FolioChange{Op: "rem-noteref", Path: "nid:" + old.NID})
+		} else if old.tmpNID != "" {
+			delta = append(delta, FolioChange{Op: "rem-noteref", Path: "nid:" + old.tmpNID})
+		}
 	}
 	return delta
 }

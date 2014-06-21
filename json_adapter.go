@@ -133,7 +133,7 @@ var deltas = map[string]func([]byte) (Delta, error){
 	},
 	"folio": func(from []byte) (Delta, error) {
 		log.Printf("jsonAdapter: parsing folio delta\n")
-		delta := NewFolioDelta()
+		delta := FolioDelta{}
 		if err := json.Unmarshal(from, &delta); err != nil {
 			return nil, err
 		}
