@@ -74,11 +74,15 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err e
 	shadow.IncCv()
 	// send patches to store
 	for i := range patches {
-		if err = store.Patch(&shadow.res, patches[i], shadow.sid); err != nil {
-			return true, err
+		hadChanges, err := store.Patch(&shadow.res, patches[i], shadow.sid)
+		if hadChanges {
+			changed = true
+		}
+		if err != nil {
+			return changed, err
 		}
 	}
-	return true, nil
+	return changed, nil
 }
 
 func (s *Shadow) MarshalJSON() ([]byte, error) {

@@ -12,10 +12,21 @@ var (
 )
 
 type Auther interface {
-	Grant(string, string, *Resource)
+	Grant(context, string, Resource)
 }
 
 type ResourceRegistry map[string]map[string]bool
+
+type Session struct {
+	id      string
+	uid     string
+	taglib  map[string]string
+	tainted ResourceRegistry
+	reset   ResourceRegistry
+	client  chan<- Event
+	shadows map[string]*Shadow
+	stores  map[string]*Store
+}
 
 func (rr ResourceRegistry) Add(res Resource) {
 	if _, ok := rr[res.Kind]; !ok {
@@ -41,28 +52,6 @@ func (rr ResourceRegistry) Remove(res Resource) {
 			delete(rr, res.Kind)
 		}
 	}
-}
-
-type Session struct {
-	id      string
-	uid     string
-	taglib  map[string]string
-	tainted ResourceRegistry
-	reset   ResourceRegistry
-	client  chan<- Event
-	shadows map[string]*Shadow
-	stores  map[string]*Store
-}
-
-func sid_generate() string {
-	uuid := make([]byte, 16)
-	if n, err := rand.Read(uuid); err != nil || n != len(uuid) {
-		panic(err)
-	}
-	// RFC 4122
-	uuid[8] = 0x80 // variant bits
-	uuid[4] = 0x40 // v4
-	return hex.EncodeToString(uuid)
 }
 
 func NewSession(uid string) *Session {
@@ -97,7 +86,7 @@ func (sess *Session) Handle(event Event) {
 		sess.handle_session_create(event)
 	case "res-taint":
 		sess.handle_taint(event)
-	case "shadow-reset":
+	case "res-reset":
 		sess.handle_reset(event)
 	case "res-sync":
 		sess.handle_sync(event)
@@ -217,10 +206,16 @@ func (sess *Session) handle_sync(event Event) {
 		log.Println("received illegal resource kind:", shadow.res.Kind)
 		return
 	}
+	noteChanged := false
 	for _, edit := range event.Changes {
 		if changed, err := shadow.SyncIncoming(edit, store); err != nil {
 			log.Println("ERRR sync", changed, err) //todo error handling! do we need 'changed' here?
+		} else if changed {
+			noteChanged = true
 		}
+	}
+	if noteChanged {
+		store.NotifyTaint(shadow.res.ID, sess.id)
 	}
 	// cleanup tag
 	defer delete(sess.taglib, event.Res.StringRef())
@@ -263,7 +258,22 @@ func (sess *Session) handle_taint(event Event) {
 	log.Printf("session[%s]:  all tainted: %s", sess.id, sess.tainted)
 }
 func (sess *Session) handle_reset(event Event) {
-	sess.reset.Add(event.Res.Ref())
+	if _, ok := sess.shadows[event.Res.StringRef()]; ok {
+		// already exists in shdows. shadow-swap not supported yes
+		return
+	}
+	err := sess.stores[event.Res.Kind].Load(&event.Res)
+	if err != nil {
+		return
+	}
+	// store reset value
+	event.Res.Value = event.Res.Value.Empty()
+	log.Printf("session[%s]: storing new blank resource in shadows %s", sess.id, event.Res.StringRef())
+	sess.shadows[event.Res.StringRef()] = NewShadow(event.Res, sess.id)
+}
+
+func (sess *Session) Grant(ctx context, action string, res Resource) bool {
+	return true
 }
 
 func (s *Session) MarshalJSON() ([]byte, error) {
@@ -293,4 +303,15 @@ func (session *Session) UnmarshalJSON(from []byte) error {
 func (session *Session) String() string {
 	s, _ := json.MarshalIndent(session, "", "  ")
 	return string(s)
+}
+
+func sid_generate() string {
+	uuid := make([]byte, 16)
+	if n, err := rand.Read(uuid); err != nil || n != len(uuid) {
+		panic(err)
+	}
+	// RFC 4122
+	uuid[8] = 0x80 // variant bits
+	uuid[4] = 0x40 // v4
+	return hex.EncodeToString(uuid)
 }
