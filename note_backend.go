@@ -22,6 +22,10 @@ func (mem *NoteMemBackend) Kind() string {
 	return "note"
 }
 
+func (mem *NoteMemBackend) GenID() string {
+	return sid_generate()[:10]
+}
+
 // Always returns a value. if no value exists under key, create a blank object
 // and return that
 func (mem *NoteMemBackend) Get(key string) (ResourceValue, error) {
@@ -29,7 +33,7 @@ func (mem *NoteMemBackend) Get(key string) (ResourceValue, error) {
 	defer mem.RUnlock()
 	noteval, ok := mem.dict[key]
 	if !ok {
-		noteval = NewNote("")
+		return nil, NoExistError{key}
 	}
 	// tbd: should the (blank) resource already be created or can we wait for the
 	//      Upsert to happen later?
@@ -46,6 +50,19 @@ func (mem *NoteMemBackend) GetMany(keys []string) ([]ResourceValue, error) {
 		result = append(result, tmpval)
 	}
 	return result, nil
+}
+
+func (mem *NoteMemBackend) Insert(note ResourceValue) (string, error) {
+	mem.Lock()
+	defer mem.Unlock()
+	if note == nil {
+		note = NewNote("")
+	} else if _, ok := note.(Note); !ok {
+		return "", InvalidValueError{"", note}
+	}
+	newID := mem.GenID()
+	mem.dict[newID] = note.(Note)
+	return newID, nil
 }
 
 func (mem *NoteMemBackend) Upsert(key string, note ResourceValue) error {

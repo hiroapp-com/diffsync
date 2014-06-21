@@ -10,6 +10,10 @@ type MemBackend struct {
 	sync.RWMutex
 }
 
+func (mem *MemBackend) GenID() string {
+	return sid_generate()
+}
+
 func NewMemBackend(nilValueFunc func() ResourceValue) *MemBackend {
 	return &MemBackend{NilValue: nilValueFunc, Dict: make(map[string]ResourceValue)}
 }
@@ -38,6 +42,14 @@ func (mem *MemBackend) GetMany(keys []string) ([]ResourceValue, error) {
 		result = append(result, tmpval)
 	}
 	return result, nil
+}
+
+func (mem *MemBackend) Insert(val ResourceValue) (string, error) {
+	mem.Lock()
+	defer mem.Unlock()
+	key := mem.GenID()
+	mem.Dict[key] = val.Clone()
+	return key, nil
 }
 
 func (mem *MemBackend) Upsert(key string, val ResourceValue) error {
