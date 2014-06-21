@@ -184,6 +184,15 @@ func (patch notePatch) Patch(val ResourceValue, store *Store) (ResourceValue, er
 				//TODO(flo) check newnote.Peers[idx].User == context.User
 				newnote.Peers[idx].CursorPosition = delta.Value.(int64)
 			}
+		case "add-peer":
+			if len(newnote.Peers) > 0 {
+				break
+			}
+			peer := delta.Value.(Peer)
+			now := UnixTime(time.Now())
+			peer.LastSeen = &now
+			peer.LastEdit = &now
+			newnote.Peers = append(newnote.Peers, peer)
 		case "rem-peer":
 			if idx, ok := indexOfPeer(delta.Path, newnote.Peers); ok {
 				newnote.Peers = append(newnote.Peers[:idx], newnote.Peers[idx+1:]...)
@@ -209,6 +218,11 @@ func (pd *PeerDelta) UnmarshalJSON(from []byte) (err error) {
 		u := User{}
 		if err = json.Unmarshal(tmp.RawValue, &u); err == nil {
 			pd.Value = u
+		}
+	case "add-peer":
+		p := Peer{}
+		if err = json.Unmarshal(tmp.RawValue, &p); err == nil {
+			pd.Value = p
 		}
 	case "set-ts":
 		ts := Timestamp{}
@@ -290,6 +304,10 @@ func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error)
 				newres.Peers = append(newres.Peers[:idx], newres.Peers[idx+1:]...)
 				patches = append(patches, notePatch{"peers", delta.Peers[i]})
 			}
+		case "add-peer":
+			peer := delta.Peers[i].Value.(Peer)
+			newres.Peers = append(newres.Peers, peer)
+			patches = append(patches, notePatch{"peers", delta.Peers[i]})
 		}
 	}
 	return newres, patches, nil
