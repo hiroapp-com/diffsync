@@ -7,6 +7,7 @@ import (
 type ResourceValue interface {
 	GetDelta(ResourceValue) Delta
 	Clone() ResourceValue
+	Empty() ResourceValue
 	fmt.Stringer
 }
 

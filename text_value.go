@@ -26,6 +26,9 @@ func NewTextValue(text string) *TextValue {
 	return &nv
 }
 
+func (txt TextValue) Empty() ResourceValue {
+	return NewTextValue("")
+}
 func (note TextValue) Clone() ResourceValue {
 	return note
 }

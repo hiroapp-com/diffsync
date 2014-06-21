@@ -25,6 +25,10 @@ type User struct {
 	SignupAt *time.Time `json:"signup_at,omitempty"`
 }
 
+func (p Profile) Empty() ResourceValue {
+	return Profile{Contacts: []User{}}
+}
+
 func (u User) Hash() string {
 	hasher := sha1.New()
 	fmt.Fprintf(hasher, "%v", u)

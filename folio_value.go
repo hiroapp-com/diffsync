@@ -13,6 +13,11 @@ type NoteRef struct {
 	tmpNID string `json:"-"`
 }
 
+
+func (folio Folio) Empty() ResourceValue {
+	return Folio{}
+}
+
 func (ref NoteRef) diff(latest NoteRef) (changes [][4]string) {
 	if latest.Status != ref.Status {
 		changes = append(changes, [4]string{ref.NID, "status", ref.Status, latest.Status})

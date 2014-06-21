@@ -38,6 +38,10 @@ func (note Note) Clone() ResourceValue {
 	return note
 }
 
+func (note Note) Empty() ResourceValue {
+	return NewNote("")
+}
+
 func (note Note) String() string {
 	return fmt.Sprintf("%#v", note)
 }
