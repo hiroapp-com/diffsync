@@ -14,24 +14,63 @@ var (
 	_ = log.Print
 )
 
+type UnixTime time.Time
+
 type Note struct {
 	Title     string    `json:"title"`
 	Text      TextValue `json:"text"`
 	Peers     []Peer    `json:"peers"`
-	CreatedAt time.Time `json:"-"`
+	CreatedAt UnixTime  `json:"-"`
 	CreatedBy User      `json:"-"`
 }
 
 type Peer struct {
-	User           User       `json:"user"`
-	CursorPosition int64      `json:"cursor_pos,omitempty"`
-	LastSeen       *time.Time `json:"last_seen,omitempty"`
-	LastEdit       *time.Time `json:"last_edit,omitempty"`
-	Role           string     `json:"role"`
+	User           User      `json:"user"`
+	CursorPosition int64     `json:"cursor_pos,omitempty"`
+	LastSeen       *UnixTime `json:"last_seen,omitempty"`
+	LastEdit       *UnixTime `json:"last_edit,omitempty"`
+	Role           string    `json:"role"`
+}
+
+type Timestamp struct {
+	Seen *UnixTime `json:"seen"`
+	Edit *UnixTime `json:"edit,omitempty"`
+}
+
+type NoteDelta struct {
+	Text   TextDelta   `json:"text"`
+	Title  *string     `json:"title"`
+	Peers  []PeerDelta `json:"peers"`
+	Create bool        `json:"create,omitempty"`
+}
+
+type PeerDelta struct {
+	Op    string      `json:"op"`
+	Path  string      `json:"path"`
+	Value interface{} `json:"value,omitempty"`
+}
+
+type notePatch struct {
+	property string
+	payload  interface{}
 }
 
 func NewNote(text string) Note {
-	return Note{Text: TextValue(text), CreatedAt: time.Now(), Peers: []Peer{}}
+	return Note{Text: TextValue(text), CreatedAt: UnixTime(time.Now()), Peers: []Peer{}}
+}
+
+func (t UnixTime) MarshalJSON() ([]byte, error) {
+	ts := time.Time(t).UnixNano()
+	return json.Marshal(ts)
+}
+
+func (t *UnixTime) UnmarshalJSON(from []byte) error {
+	var ts int64
+	if err := json.Unmarshal(from, &ts); err != nil {
+		return err
+	}
+	*t = UnixTime(time.Unix(0, ts))
+	return nil
 }
 
 func (note Note) Clone() ResourceValue {
@@ -106,16 +145,6 @@ func (note Note) GetDelta(latest ResourceValue) Delta {
 	return delta
 }
 
-type Timestamp struct {
-	Seen *time.Time `json:"seen"`
-	Edit *time.Time `json:"edit,omitempty"`
-}
-
-type notePatch struct {
-	property string
-	payload  interface{}
-}
-
 func (patch notePatch) Patch(val ResourceValue, store *Store) (ResourceValue, error) {
 	var err error
 	note := val.(Note)
@@ -162,18 +191,6 @@ func (patch notePatch) Patch(val ResourceValue, store *Store) (ResourceValue, er
 		}
 	}
 	return newnote, err
-}
-
-type NoteDelta struct {
-	Text  TextDelta   `json:"text"`
-	Title *string     `json:"title"`
-	Peers []PeerDelta `json:"peers"`
-}
-
-type PeerDelta struct {
-	Op    string      `json:"op"`
-	Path  string      `json:"path"`
-	Value interface{} `json:"value,omitempty"`
 }
 
 func (pd *PeerDelta) UnmarshalJSON(from []byte) (err error) {
@@ -319,10 +336,10 @@ func diffPeerMeta(lhs, rhs Peer) []PeerDelta {
 	if lhs.CursorPosition != rhs.CursorPosition {
 		deltas = append(deltas, PeerDelta{"set-cursor", path, rhs.CursorPosition})
 	}
-	if rhs.LastSeen != nil && lhs.LastSeen.Before(*rhs.LastSeen) {
+	if rhs.LastSeen != nil && lhs.LastSeen != nil && time.Time(*lhs.LastSeen).Before(time.Time(*rhs.LastSeen)) {
 		timestamps := Timestamp{Seen: rhs.LastSeen}
 
-		if rhs.LastEdit != nil && lhs.LastEdit.Before(*rhs.LastEdit) {
+		if rhs.LastEdit != nil && time.Time(*lhs.LastEdit).Before(time.Time(*rhs.LastEdit)) {
 			timestamps.Edit = rhs.LastEdit
 		}
 		deltas = append(deltas, PeerDelta{"set-ts", path, timestamps})
