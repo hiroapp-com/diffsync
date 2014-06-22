@@ -178,7 +178,7 @@ func (folio Folio) GetDelta(latest ResourceValue) Delta {
 		}
 		// already existes in old folio, check differences
 		if old.NID != master[i].NID {
-			delta = append(delta, FolioChange{"set-nid", "nid:" + old.NID, master[i]})
+			delta = append(delta, FolioChange{"set-nid", "nid:" + old.NID, master[i].NID})
 		}
 		if old.Status != master[i].Status {
 			delta = append(delta, FolioChange{"set-status", "nid:" + master[i].NID, master[i].Status})
