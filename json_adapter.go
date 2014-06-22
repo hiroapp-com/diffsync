@@ -124,7 +124,7 @@ type jsonMsg struct {
 var deltas = map[string]func([]byte) (Delta, error){
 	"note": func(from []byte) (Delta, error) {
 		log.Printf("jsonAdapter: parsing note delta\n")
-		delta := NewNoteDelta()
+		delta := NoteDelta{}
 		if err := json.Unmarshal(from, &delta); err != nil {
 			return nil, err
 		}
