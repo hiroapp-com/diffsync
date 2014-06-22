@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"encoding/json"
@@ -19,10 +18,12 @@ type UnixTime time.Time
 type Note struct {
 	Title     string    `json:"title"`
 	Text      TextValue `json:"text"`
-	Peers     []Peer    `json:"peers"`
+	Peers     PeerList  `json:"peers"`
 	CreatedAt UnixTime  `json:"-"`
 	CreatedBy User      `json:"-"`
 }
+
+type PeerList []Peer
 
 type Peer struct {
 	User           User      `json:"user"`
@@ -37,14 +38,9 @@ type Timestamp struct {
 	Edit *UnixTime `json:"edit,omitempty"`
 }
 
-type NoteDelta struct {
-	Text   TextDelta   `json:"text"`
-	Title  *string     `json:"title"`
-	Peers  []PeerDelta `json:"peers"`
-	Create bool        `json:"create,omitempty"`
-}
+type NoteDelta []NoteDeltaElement
 
-type PeerDelta struct {
+type NoteDeltaElement struct {
 	Op    string      `json:"op"`
 	Path  string      `json:"path"`
 	Value interface{} `json:"value,omitempty"`
@@ -73,6 +69,43 @@ func (t *UnixTime) UnmarshalJSON(from []byte) error {
 	return nil
 }
 
+func (pl *PeerList) remove(path string) {
+	i, ok := pl.indexFromPath(path)
+	if !ok {
+		return
+	}
+	plist := *pl
+	plist[i] = plist[len(plist)-1]
+	plist = plist[0 : len(plist)-1]
+	*pl = plist
+}
+
+func (pl PeerList) indexFromPath(path string) (int, bool) {
+	var checkFn func(Peer) bool
+	switch {
+	case len(path) > 4 && path[:4] != "uid:":
+		checkFn = func(p Peer) bool {
+			return p.User.UID == path[4:]
+		}
+	case len(path) > 5 && path[:6] == "email":
+		checkFn = func(p Peer) bool {
+			return p.User.Email == path[6:]
+		}
+	case len(path) > 5 && path[:6] == "phone":
+		checkFn = func(p Peer) bool {
+			return p.User.Phone == path[6:]
+		}
+	default:
+		return 0, false
+	}
+	for i := range pl {
+		if checkFn(pl[i]) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
 func (note Note) Clone() ResourceValue {
 	return note
 }
@@ -87,15 +120,17 @@ func (note Note) String() string {
 
 func (note Note) GetDelta(latest ResourceValue) Delta {
 	master := latest.(Note)
-	delta := NewNoteDelta()
+	delta := NoteDelta{}
 	// calculate TextDelta
-	delta.Text = note.Text.GetDelta(master.Text).(TextDelta)
 	if note.Title != master.Title {
-		delta.Title = stringPtr(master.Title)
+		delta = append(delta, NoteDeltaElement{"set-title", "", master.Title})
+	}
+	if textDelta := note.Text.GetDelta(master.Text).(TextDelta); textDelta.HasChanges() {
+		delta = append(delta, NoteDeltaElement{"delta-text", "", textDelta})
 	}
 	// pupulate lookup objects of old versions
 	oldExisting := map[string]Peer{}
-	oldDangling := []Peer{}
+	oldDangling := PeerList{}
 	for _, peer := range note.Peers {
 		if peer.User.UID == "" {
 			oldDangling = append(oldDangling, peer)
@@ -107,40 +142,45 @@ func (note Note) GetDelta(latest ResourceValue) Delta {
 	for i := range master.Peers {
 		old, ok := oldExisting[master.Peers[i].User.UID]
 		if ok {
-			delta.Peers = append(delta.Peers, diffPeerMeta(old, master.Peers[i])...)
+			delta = append(delta, diffPeerMeta(old, master.Peers[i])...)
 			delete(oldExisting, old.User.UID)
 			continue
 		}
 		//TODO(flo) this... hurts in the eyes. fix this.
-		if idx, ok := indexOfPeer(fmt.Sprintf("user/email:%s", master.Peers[i].User.Email), oldDangling); master.Peers[i].User.Email != "" && ok {
-			delta.Peers = append(delta.Peers, PeerDelta{"swap-user", fmt.Sprintf("user/email:%s", master.Peers[i].User.Email), master.Peers[i].User})
-			oldDangling[idx].User = master.Peers[i].User
-			delta.Peers = append(delta.Peers, diffPeerMeta(oldDangling[idx], master.Peers[i])...)
-			// remove dangling peer from list
-			oldDangling = append(oldDangling[:idx], oldDangling[idx+1:]...)
-			continue
-		} else if idx, ok = indexOfPeer(fmt.Sprintf("user/phone:%s", master.Peers[i].User.Phone), oldDangling); master.Peers[i].User.Phone != "" && ok {
-			delta.Peers = append(delta.Peers, PeerDelta{"swap-user", fmt.Sprintf("user/phone:%s", master.Peers[i].User.Phone), master.Peers[i].User})
-			oldDangling[idx].User = master.Peers[i].User
-			delta.Peers = append(delta.Peers, diffPeerMeta(oldDangling[idx], master.Peers[i])...)
-			// remove dangling peer from list
-			oldDangling = append(oldDangling[:idx], oldDangling[idx+1:]...)
-			continue
+		if master.Peers[i].User.Email != "" {
+			if idx, ok := oldDangling.indexFromPath("email:" + master.Peers[i].User.Email); ok {
+				// found current master-entry in old, dangling entries in the comparee.
+				delta = append(delta, NoteDeltaElement{"swap-user", oldDangling[idx].User.pathRef("peers"), master.Peers[i].User})
+				oldDangling[idx].User = master.Peers[i].User
+				// see if anything in the meta-info changed (e.g. last-seen/-edit timestamps, cursor-positions)
+				delta = append(delta, diffPeerMeta(oldDangling[idx], master.Peers[i])...)
+				// remove from dangling
+				oldDangling = append(oldDangling[:idx], oldDangling[idx+1:]...)
+				continue
+			}
+		}
+		if master.Peers[i].User.Phone != "" {
+			if idx, ok := oldDangling.indexFromPath("phone:" + master.Peers[i].User.Email); ok {
+				// found current master-entry in old, dangling entries in the comparee.
+				delta = append(delta, NoteDeltaElement{"swap-user", oldDangling[idx].User.pathRef("peers"), master.Peers[i].User})
+				oldDangling[idx].User = master.Peers[i].User
+				// see if anything in the meta-info changed (e.g. last-seen/-edit timestamps, cursor-positions)
+				delta = append(delta, diffPeerMeta(oldDangling[idx], master.Peers[i])...)
+				// remove from dangling
+				oldDangling = append(oldDangling[:idx], oldDangling[idx+1:]...)
+				continue
+			}
 		}
 		// nothing matched, Looks like a new one!
 		cpy := master.Peers[i]
-		delta.Peers = append(delta.Peers, PeerDelta{"add-peer", "", cpy})
+		delta = append(delta, NoteDeltaElement{"add-peer", "peers/", cpy})
 	}
 	for uid, _ := range oldExisting {
-		delta.Peers = append(delta.Peers, PeerDelta{Op: "rem-peer", Path: fmt.Sprintf("user/uid:%s", uid)})
+		delta = append(delta, NoteDeltaElement{Op: "rem-peer", Path: oldExisting[uid].User.pathRef("peers")})
 	}
 	for i := range oldDangling {
 		// everything left in the dangling-array did not have a matching entry in the master-list, thus remove
-		if oldDangling[i].User.Email != "" {
-			delta.Peers = append(delta.Peers, PeerDelta{Op: "rem-peer", Path: fmt.Sprintf("user/email:%s", oldDangling[i].User.Email)})
-		} else if oldDangling[i].User.Phone != "" {
-			delta.Peers = append(delta.Peers, PeerDelta{Op: "rem-peer", Path: fmt.Sprintf("user/phone:%s", oldDangling[i].User.Phone)})
-		}
+		delta = append(delta, NoteDeltaElement{Op: "rem-peer", Path: oldDangling[i].User.pathRef("peers")})
 	}
 	return delta
 }
@@ -160,13 +200,15 @@ func (patch notePatch) Patch(val ResourceValue, store *Store) (ResourceValue, er
 			return nil, err
 		}
 		newnote.Text = newtxt.(TextValue)
+		// TODO(flo) update last-edit/-seen of current context's peer-entry
 	case "title":
 		titles := patch.payload.([2]string)
 		if note.Title == titles[0] {
 			newnote.Title = titles[1]
 		}
+		// TODO(flo) update last-edit/-seen of current context's peer-entry
 	case "peers":
-		delta := patch.payload.(PeerDelta)
+		delta := patch.payload.(NoteDeltaElement)
 		switch delta.Op {
 		case "invite":
 			user := delta.Value.(User)
@@ -180,7 +222,7 @@ func (patch notePatch) Patch(val ResourceValue, store *Store) (ResourceValue, er
 			newnote.Peers = append(newnote.Peers, Peer{User: user, Role: "invited"})
 			// TODO(flo): add user to requestor's Contacts and send tainted event
 		case "set-cursor":
-			if idx, ok := indexOfPeer(delta.Path, newnote.Peers); ok {
+			if idx, ok := newnote.Peers.indexFromPath(delta.Path); ok {
 				//TODO(flo) check newnote.Peers[idx].User == context.User
 				newnote.Peers[idx].CursorPosition = delta.Value.(int64)
 			}
@@ -194,7 +236,7 @@ func (patch notePatch) Patch(val ResourceValue, store *Store) (ResourceValue, er
 			peer.LastEdit = &now
 			newnote.Peers = append(newnote.Peers, peer)
 		case "rem-peer":
-			if idx, ok := indexOfPeer(delta.Path, newnote.Peers); ok {
+			if idx, ok := newnote.Peers.indexFromPath(delta.Path); ok {
 				newnote.Peers = append(newnote.Peers[:idx], newnote.Peers[idx+1:]...)
 			}
 		}
@@ -202,7 +244,7 @@ func (patch notePatch) Patch(val ResourceValue, store *Store) (ResourceValue, er
 	return newnote, err
 }
 
-func (pd *PeerDelta) UnmarshalJSON(from []byte) (err error) {
+func (delta *NoteDeltaElement) UnmarshalJSON(from []byte) (err error) {
 	tmp := struct {
 		Op       string          `json:"op"`
 		Path     string          `json:"path"`
@@ -211,148 +253,114 @@ func (pd *PeerDelta) UnmarshalJSON(from []byte) (err error) {
 	if err = json.Unmarshal(from, &tmp); err != nil {
 		return
 	}
-	pd.Op = tmp.Op
-	pd.Path = tmp.Path
+	delta.Op = tmp.Op
+	delta.Path = tmp.Path
 	switch tmp.Op {
-	case "swap-user", "invite":
+	case "invite":
 		u := User{}
 		if err = json.Unmarshal(tmp.RawValue, &u); err == nil {
-			pd.Value = u
+			delta.Value = u
 		}
 	case "add-peer":
 		p := Peer{}
 		if err = json.Unmarshal(tmp.RawValue, &p); err == nil {
-			pd.Value = p
+			delta.Value = p
 		}
 	case "set-ts":
 		ts := Timestamp{}
 		if err = json.Unmarshal(tmp.RawValue, &ts); err == nil {
-			pd.Value = ts
+			delta.Value = ts
 		}
 	case "set-cursor":
 		var i int64
 		if err = json.Unmarshal(tmp.RawValue, &i); err == nil {
-			pd.Value = i
+			delta.Value = i
+		}
+	case "delta-text":
+		tv := TextDelta("")
+		if err = json.Unmarshal(tmp.RawValue, &tv); err == nil {
+			delta.Value = tv
 		}
 	default:
 		s := ""
 		if err = json.Unmarshal(tmp.RawValue, &s); err == nil {
-			pd.Value = s
+			delta.Value = s
 		}
 	}
 	return
 }
 
-func NewNoteDelta() NoteDelta {
-	return NoteDelta{Peers: []PeerDelta{}}
-}
-
 func (delta NoteDelta) HasChanges() bool {
-	if delta.Text.HasChanges() {
-		return true
-	}
-	if delta.Title != nil {
-		return true
-	}
-	if delta.Peers != nil && len(delta.Peers) > 0 {
-		return true
-	}
-	return false
+	return len(delta) > 0
 }
 
 func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {
 	original, ok := to.(Note)
-	newres := original.Clone().(Note)
 	if !ok {
 		return nil, nil, errors.New("cannot apply NoteDelta to non Note")
 	}
-	var err error
-	var tmptxt ResourceValue
+	newres := original.Clone().(Note)
 	patches := []Patcher{}
-	if delta.Text.HasChanges() {
-		tmptxt, patches, err = delta.Text.Apply(original.Text)
-		if err != nil {
-			return nil, nil, err
-		}
-		newres.Text = tmptxt.(TextValue)
-		log.Println("PATCH: ", patches)
-		for i := range patches {
-			patches[i] = notePatch{"text", patches[i]}
-		}
-		log.Println("PATCH: ", patches)
-	}
-	if delta.Title != nil {
-		patches = append(patches, notePatch{"title", [2]string{newres.Title, *delta.Title}})
-		newres.Title = *delta.Title
-	}
-	for i := range delta.Peers {
-		switch delta.Peers[i].Op {
+	for _, diff := range delta {
+		switch diff.Op {
+		case "set-title":
+			newres.Title = diff.Value.(string)
+			patches = append(patches, notePatch{"title", [2]string{original.Title, diff.Value.(string)}})
+		case "delta-text":
+			tmpText, textPatches, err := diff.Value.(TextDelta).Apply(original.Text)
+			if err != nil {
+				// this should not happen. deltas against the shadow must always succeed given synchronized shadows
+				return nil, nil, err
+			}
+			newres.Text = tmpText.(TextValue)
+			for i := range textPatches {
+				patches = append(patches, notePatch{"text", textPatches[i]})
+			}
 		case "invite":
-			if u, ok := delta.Peers[i].Value.(User); ok {
-				newres.Peers = append(newres.Peers, Peer{User: u})
-				patches = append(patches, notePatch{"peers", delta.Peers[i]})
+			user, ok := diff.Value.(User)
+			if !ok || diff.Path != "peers/" {
+				break
 			}
-		case "set-cursor":
-			if cursor, ok := delta.Peers[i].Value.(int64); ok {
-				if idx, ok := indexOfPeer(delta.Peers[i].Path, newres.Peers); ok {
-					newres.Peers[idx].CursorPosition = cursor
-					patches = append(patches, notePatch{"peers", delta.Peers[i]})
-				}
-			}
-		case "rem-peer":
-			if idx, ok := indexOfPeer(delta.Peers[i].Path, newres.Peers); ok {
-				newres.Peers = append(newres.Peers[:idx], newres.Peers[idx+1:]...)
-				patches = append(patches, notePatch{"peers", delta.Peers[i]})
-			}
+			newres.Peers = append(newres.Peers, Peer{User: user})
+			patches = append(patches, notePatch{"peers", diff})
 		case "add-peer":
-			peer := delta.Peers[i].Value.(Peer)
+			peer, ok := diff.Value.(Peer)
+			if !ok || diff.Path != "peers/" {
+				break
+			}
 			newres.Peers = append(newres.Peers, peer)
-			patches = append(patches, notePatch{"peers", delta.Peers[i]})
+			patches = append(patches, notePatch{"peers", diff})
+		case "rem-peer":
+			idx, ok := newres.Peers.indexFromPath(diff.Path)
+			if !ok {
+				break
+			}
+			newres.Peers = append(newres.Peers[:idx], newres.Peers[idx+1:]...)
+			patches = append(patches, notePatch{"peers", diff})
+		case "set-cursor":
+			cursor, ok := diff.Value.(int64)
+			if !ok {
+				break
+			}
+			if idx, ok := newres.Peers.indexFromPath(diff.Path); ok {
+				newres.Peers[idx].CursorPosition = cursor
+				patches = append(patches, notePatch{"peers", diff})
+			}
 		}
 	}
 	return newres, patches, nil
 }
 
 // these functions will be fleshed out and possibly put somewhere else, as soon as we have the proper DB logic
-func stringPtr(s string) *string {
-	return &s
-}
-
-func indexOfPeer(path string, peers []Peer) (idx int, found bool) {
-	var chkFn func(Peer) bool
-	switch {
-	case strings.HasPrefix(path, "user/uid:"):
-		chkFn = func(p Peer) bool {
-			return p.User.UID == path[9:]
-		}
-	case strings.HasPrefix(path, "user/email:"):
-		chkFn = func(p Peer) bool {
-			return p.User.Email == path[11:]
-		}
-	case strings.HasPrefix(path, "user/phone:"):
-		chkFn = func(p Peer) bool {
-			return p.User.Phone == path[11:]
-		}
-	default:
-		return 0, false
-	}
-	for idx = range peers {
-		if chkFn(peers[idx]) {
-			return idx, true
-		}
-	}
-	return 0, false
-}
-
-func diffPeerMeta(lhs, rhs Peer) []PeerDelta {
-	deltas := []PeerDelta{}
-	path := fmt.Sprintf("user/uid:%s", lhs.User.UID)
+func diffPeerMeta(lhs, rhs Peer) NoteDelta {
+	delta := NoteDelta{}
+	path := lhs.User.pathRef("peers")
 	// check if anything changed between old and master
 	if lhs.Role != rhs.Role {
-		deltas = append(deltas, PeerDelta{"change-role", path, rhs.Role})
+		delta = append(delta, NoteDeltaElement{"change-role", path, rhs.Role})
 	}
 	if lhs.CursorPosition != rhs.CursorPosition {
-		deltas = append(deltas, PeerDelta{"set-cursor", path, rhs.CursorPosition})
+		delta = append(delta, NoteDeltaElement{"set-cursor", path, rhs.CursorPosition})
 	}
 	if rhs.LastSeen != nil && lhs.LastSeen != nil && time.Time(*lhs.LastSeen).Before(time.Time(*rhs.LastSeen)) {
 		timestamps := Timestamp{Seen: rhs.LastSeen}
@@ -360,7 +368,7 @@ func diffPeerMeta(lhs, rhs Peer) []PeerDelta {
 		if rhs.LastEdit != nil && time.Time(*lhs.LastEdit).Before(time.Time(*rhs.LastEdit)) {
 			timestamps.Edit = rhs.LastEdit
 		}
-		deltas = append(deltas, PeerDelta{"set-ts", path, timestamps})
+		delta = append(delta, NoteDeltaElement{"set-ts", path, timestamps})
 	}
-	return deltas
+	return delta
 }
