@@ -70,7 +70,7 @@ func (delta FolioDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error
 			folio = append(folio, change.Value.(NoteRef))
 		case "rem-noteref":
 			folio.remove(change.Path)
-		//case "swap-noteref": break // only sent by server, never received
+		//case "set-nid", "swap-noteref": continue // only sent by server, never received
 		case "set-status":
 			if change.Path[:4] != "nid:" {
 				continue
@@ -170,22 +170,21 @@ func (folio Folio) GetDelta(latest ResourceValue) Delta {
 		if !ok {
 			old, ok = oldExisting[master[i].tmpNID]
 		}
-		if ok {
-			// already existes in old folio, check differences
-			if len(old.NID) < 4 {
-				// we expect master here to already have the correct NID
-				delta = append(delta, FolioChange{"swap-noteref", "nid:" + old.NID, master[i]})
-			}
-			if old.Status != master[i].Status {
-				delta = append(delta, FolioChange{"set-status", "nid:" + master[i].NID, master[i].Status})
-			}
-			delete(oldExisting, old.NID)
-			delete(oldExisting, old.tmpNID)
+		if !ok {
+			// Looks like a new one!
+			cpy := master[i]
+			delta = append(delta, FolioChange{"add-noteref", "", cpy})
 			continue
 		}
-		// nothing matched, Looks like a new one!
-		cpy := master[i]
-		delta = append(delta, FolioChange{"add-noteref", "", cpy})
+		// already existes in old folio, check differences
+		if old.NID != master[i].NID {
+			delta = append(delta, FolioChange{"set-nid", "nid:" + old.NID, master[i]})
+		}
+		if old.Status != master[i].Status {
+			delta = append(delta, FolioChange{"set-status", "nid:" + master[i].NID, master[i].Status})
+		}
+		delete(oldExisting, old.NID)
+		delete(oldExisting, old.tmpNID)
 	}
 	// remove everything that's left in the bag.
 	for _, old := range oldExisting {
