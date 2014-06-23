@@ -37,8 +37,10 @@ func (shadow *Shadow) UpdatePending(store *Store) error {
 	delta := shadow.res.Value.GetDelta(res.Value)
 	log.Printf("shadow[%s:%p]: found delta: `%s`\n", res.StringRef(), &res, delta)
 	shadow.pending = append(shadow.pending, Edit{shadow.SessionClock.Clone(), delta})
-	shadow.IncSv()
-	shadow.res = res
+	if delta.HasChanges() {
+		shadow.res = res
+		shadow.IncSv()
+	}
 	return nil
 }
 
@@ -62,7 +64,6 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err e
 		return false, err
 	}
 	if !edit.Delta.HasChanges() {
-		shadow.IncCv()
 		return false, nil
 	}
 	newres, patches, err := edit.Delta.Apply(shadow.res.Value)
