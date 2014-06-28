@@ -102,7 +102,8 @@ func (hub *SessionHub) Run() {
 				//inbox closed, shutdown requested
 				return
 			}
-			event.ctx = context{sid: event.SID, timestamp: time.Now()}
+			//TODO event should get context earlier at creation and must include valid uid
+			event.ctx = context{sid: event.SID, ts: time.Now()}
 			hub.logEvent(event)
 			hub.route(event.SID, event)
 		}

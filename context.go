@@ -5,7 +5,7 @@ import (
 )
 
 type context struct {
-	sid       string
-	token     string
-	timestamp time.Time
+	sid string
+	uid string
+	ts  time.Time
 }
