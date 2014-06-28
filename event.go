@@ -73,7 +73,8 @@ type Event struct {
 	// living) client.
 	client chan<- Event
 
-	ctx context
+	ctx   context
+	store *Store
 }
 
 func NewEvent() Event {
