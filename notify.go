@@ -11,20 +11,12 @@ type Subscription struct {
 }
 
 type SubscriberChecker interface {
-	GetSubscriptions(Subscription) []Subscription
-}
-
-func (sub Subscription) CloneFor(sid, uid string) Subscription {
-	// todo make sure we canuse `sub` for this
-	log.Println("WWWOOOPP", sub, sid, uid)
-	return Subscription{sid: sid, uid: uid, res: sub.res.Ref()}
+	GetSubscriptions(Resource) ([]string, error)
 }
 
 type NotifyListener chan Event
 
-//func (notify NotifyListener) notify_iospush(event Event)
-
-func (notify NotifyListener) Run(subs SubscriberChecker, sesshub chan<- Event) {
+func (notify NotifyListener) Run(subscriptions SubscriberChecker, sesshub chan<- Event) {
 	log.Printf("notify (%v) starting up ...", notify)
 	for event := range notify {
 		log.Println("notify: received", event)
@@ -35,26 +27,19 @@ func (notify NotifyListener) Run(subs SubscriberChecker, sesshub chan<- Event) {
 			log.Printf("notify: received event that i cannot handle (name: `%s`), doing nothing.", event.Name)
 			continue
 		}
-		uid_subs := map[string]struct{}{}
-		for _, sub := range subs.GetSubscriptions(Subscription{res: event.Res}) {
-			log.Println("notify: found subscriber ", sub)
-			if sub.uid != "" {
-				// aggregate UIDs. We might get multiple sessions for same user
-				uid_subs[sub.uid] = struct{}{}
-			}
-			if sub.sid != "" && sub.sid != event.SID {
-				// forward Event to session
-				log.Println("notify: sending event to sessub-inbox")
-				sesshub <- Event{Name: event.Name, SID: sub.sid, Res: event.Res}
-			}
+		if event.SID != "" {
+			// addressed directly to a certain session, send only there
+			sesshub <- Event{Name: event.Name, SID: event.SID, Res: event.Res}
+			continue
 		}
-		//for uid, _ := range uid_subs {
-		// not implemented
-		// check if user had "ONLINE" session and already seen the update. the
-		// connection layer will be adapted to keep a registry of currently active
-		// notify user "
-		//}
-
+		subs, err := subscriptions.GetSubscriptions(event.Res)
+		if err != nil {
+			continue
+		}
+		for i := range subs {
+			log.Printf("notify: found subscribed session (%s), forwarding event to inbox.\n", subs[i])
+			sesshub <- Event{Name: event.Name, SID: subs[i], Res: event.Res, store: event.store, ctx: event.ctx}
+		}
 	}
 	log.Printf("notify (%v) channel closed, shutting down, notify")
 }
