@@ -4,33 +4,65 @@ package diffsync
 // and thread-safety
 
 import (
+	"errors"
+	"fmt"
 	"log"
+
+	"database/sql"
 )
 
 var (
 	_ = log.Print
 )
 
+type ResourceBackend interface {
+	Get(string) (ResourceValue, error)
+	Patch(string, Patch, *Store, context) error
+	CreateEmpty(context) (string, error)
+}
+
 type Store struct {
-	kind     string
-	backends map[string]StoreBackend
-	backend  StoreBackend
+	backends map[string]ResourceBackend
 	notify   chan<- Event
+	userDB   *sql.DB
 }
 
-func (store *Store) OpenNew(kind string) *Store {
-	return &Store{kind: kind, backends: store.backends, backend: store.backends[kind], notify: store.notify}
+type Patch struct {
+	Op       string
+	Path     string
+	Value    interface{}
+	OldValue interface{}
 }
 
-func NewStore(kind string, backends map[string]StoreBackend, notify chan<- Event) *Store {
-	return &Store{kind: kind, backends: backends, backend: backends[kind], notify: notify}
+type NoExistError struct {
+	key string
 }
 
-func (store *Store) CreateEmpty() (Resource, error) {
-	res := Resource{Kind: store.kind}
+type InvalidValueError struct {
+	key string
+	val interface{}
+}
+
+func NewStore(userDB *sql.DB, notify chan<- Event) *Store {
+	return &Store{backends: map[string]ResourceBackend{}, userDB: userDB, notify: notify}
+}
+
+func (store *Store) Mount(kind string, backend ResourceBackend) {
+	store.backends[kind] = backend
+}
+
+func (store *Store) GetOrCreateUser(userRef User) (User, error) {
+	if store.userDB == nil {
+		return User{}, errors.New("store: user-db not set, cannot query or create users")
+	}
+	return getOrCreateUser(userRef, store.userDB)
+}
+
+func (store *Store) NewResource(kind string, ctx context) (Resource, error) {
+	res := Resource{Kind: kind}
 	// create new Nil Resource in backend
 	var err error
-	res.ID, err = store.backend.Insert(nil)
+	res.ID, err = store.backends[kind].CreateEmpty(ctx)
 	if err != nil {
 		return Resource{}, err
 	}
@@ -44,62 +76,40 @@ func (store *Store) CreateEmpty() (Resource, error) {
 func (store *Store) Load(res *Resource) error {
 	log.Printf("resource[%s:%p]: loading data", res.StringRef(), res)
 	// todo: send get request via gdata connection
-	value, err := store.backend.Get(res.ID)
+	value, err := store.backends[res.Kind].Get(res.ID)
 	if err != nil {
 		return err
 	}
-	// for now we can ignore the exists flag. if it's a new note, here we'll return a blank/initialized value
-	// which is the desired case (behaviour needs more documentation). Also the patch matchod will easily
-	// make use of the same feature
-	res.Value = value.Clone()
+	res.Value = value
 	return nil
 }
 
-func (store *Store) LoadOrCreate(res *Resource) (created bool, err error) {
-	err = store.Load(res)
-	if _, ok := err.(NoExistError); ok {
-		newID, err := store.backend.Insert(res.Value)
-		if err != nil {
-			return false, err
-		}
-		res.ID = newID
-		created = true
-	}
-	return
+func (store *Store) Patch(res Resource, patch Patch, ctx context) error {
+	return store.backends[res.Kind].Patch(res.ID, patch, store, ctx)
 }
 
-func (store *Store) NotifyReset(id string) {
+func (store *Store) NotifyReset(kind, id string, ctx context) {
 	select {
-	case store.notify <- Event{Name: "res-reset", SID: "", Res: Resource{Kind: store.kind, ID: id}}:
+	case store.notify <- Event{Name: "res-reset", Res: Resource{Kind: kind, ID: id}, store: store, ctx: ctx}:
 		return
 	default:
-		log.Printf("store[%s]: cannot send `res-reset`, notify channel not writable.\n", store.kind)
+		log.Printf("store: cannot send `res-reset`, notify channel not writable.\n")
 	}
 }
 
-func (store *Store) NotifyTaint(id string, sid string) {
+func (store *Store) NotifyTaint(kind, id string, ctx context) {
 	select {
-	case store.notify <- Event{Name: "res-taint", SID: sid, Res: Resource{Kind: store.kind, ID: id}}:
+	case store.notify <- Event{Name: "res-taint", Res: Resource{Kind: kind, ID: id}, store: store, ctx: ctx}:
 		return
 	default:
-		log.Printf("store[%s]: cannot send `res-taint`, notify channel not writable.\n", store.kind)
+		log.Printf("store: cannot send `res-taint`, notify channel not writable.\n")
 	}
 }
 
-func (store *Store) Patch(res *Resource, patch Patcher, sid string) (bool, error) {
-	value, err := store.backend.Get(res.ID)
-	if err != nil {
-		return false, err
-	}
-	newval, err := patch.Patch(value, store)
-	if err != nil {
-		return false, err
-	}
-	if newval.GetDelta(value).HasChanges() {
-		if err := store.backend.Upsert(res.ID, newval); err != nil {
-			return true, err
-		}
-		return true, nil
-	}
-	return false, nil
+func (err InvalidValueError) Error() string {
+	return fmt.Sprintf("Invalid Value %s", err.key)
+}
+
+func (err NoExistError) Error() string {
+	return fmt.Sprintf("Resource with ID %s does not exist", err.key)
 }

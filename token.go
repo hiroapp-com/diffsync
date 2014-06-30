@@ -1,114 +1,150 @@
 package diffsync
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"time"
+
+	"database/sql"
 )
 
-// Public interface for checking and consuming auth-tokens.
-// A TokenConsumer should be able to check if a given token
-// is valid and return its properties (e.g. associated user-id)
-// and the Resources accessible by that token.
-// Consuming a token also implies that the TokenConsumer
-// will create a new session (based on the tokens Resource capabilities)
-// if needed.
-// TokenConsumer.Consume can also receive a consumer-session ID
-// If provided (and the session is still valid), the consumer should
-// merge "new" resources from the token's capabiliies to the current
-// session.
-// If the provided session is owned by a hiro-user, the consumer should
-// also send a  patch to the users folio-resource, so that the addition will
-// be propagated to all other current user-sessions.
 type TokenConsumer interface {
-	Token(string) (*Token, error)
-	Consume(string, string) (string, error)
+	CreateSession(string, *Store) (*Session, error)
+	Consume(string, string, *Store) (*Session, error)
+	GetUID(string) (string, error)
 }
 
 type Token struct {
-	Key       string
-	UserID    string
-	Resources []Resource
+	Key        string `sql:"token"`
+	UID        string `sql:"uid"`
+	NID        string `sql:"nid"`
+	CreatedAt  string `sql:"created_at"`
+	ConsumedAt string `sql:"consumed_at"`
 }
 
 type TokenDoesNotexistError string
 
-func (err TokenDoesNotexistError) Error() string {
-	return fmt.Sprintf("token `%s` does not exist")
-}
-
 type HiroTokens struct {
+	db       *sql.DB
 	sessions SessionBackend
-	stores   map[string]*Store
-	Tokens   map[string]Token
 }
 
-func NewHiroTokens(backend SessionBackend, stores map[string]*Store) *HiroTokens {
-	return &HiroTokens{backend, stores, make(map[string]Token)}
+func NewHiroTokens(backend SessionBackend, db *sql.DB) *HiroTokens {
+	return &HiroTokens{db, backend}
 }
 
-func (hirotok *HiroTokens) Token(key string) (*Token, error) {
-	token, ok := hirotok.Tokens[key]
-	if !ok {
-		return nil, TokenDoesNotexistError(key)
-	}
-	return &token, nil
-}
-
-func (hirotok *HiroTokens) Consume(token_key string, sid string) (string, error) {
-	log.Printf("consuming token `%s` (for sid `%s`)", token_key, sid)
-	token, err := hirotok.Token(token_key)
+func (tok *HiroTokens) CreateSession(token_key string, store *Store) (*Session, error) {
+	log.Printf("creating new session, using token `%s`", token_key)
+	token, err := tok.getToken(token_key)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	var session *Session
-	if sid != "" {
-		log.Printf("session (%s) exists, loading from backend", sid)
-		session, err = hirotok.sessions.Get(sid)
+	sid := sid_generate()
+	var profile Resource
+	if token.UID == "" {
+		// anon token
+		// create new blank user
+		profile, err = store.NewResource("profile", context{sid: sid})
 		if err != nil {
-			// todo check if session has expired or anyhing
-			// maybe we want to proceed normaly with token
-			// even if provided session is dead for some reason
-			return "", err
+			return nil, err
+		}
+	} else if token.UID != "" && token.NID == "" {
+		// login token
+		// load token's user
+		profile = Resource{Kind: "profile", ID: token.UID}
+		if err = store.Load(&profile); err != nil {
+			return nil, err
 		}
 	}
-	modified := false
-	if session == nil {
-		// create session
-		session = NewSession(token.UserID)
-		// TODO(flo) implement profile loading for anon/token users
-		profile := Resource{Kind: "profile", ID: token.UserID}
-		err := hirotok.stores["profile"].Load(&profile)
-		if err != nil {
-			return "", err
+	uid := profile.Value.(Profile).User.UID
+	session := NewSession(sid, uid)
+	if token.NID != "" {
+		if _, err := tok.addNoteRef(uid, token.NID); err != nil {
+			return nil, err
 		}
-		session.shadows[profile.StringRef()] = NewShadow(profile, session.id)
-		log.Printf("created new Session `%s`", session.id)
-		modified = true
+		store.NotifyTaint("note", token.NID, context{session.sid, session.uid, time.Now()})
 	}
-	var store *Store
-	for _, res := range session.diff_resources(token.Resources) {
-		// load current value
-		log.Printf("loading add adding new resource to session `%s`: `%v`\n", session.id, res)
-		newres := res.Ref()
-		store = hirotok.stores[newres.Kind]
-		if store == nil {
-			return "", fmt.Errorf("unknown resource kind: `%s`", newres.Kind)
-		}
-		err := store.Load(&newres)
-		if err != nil {
-			//todo get rid of panic
-			panic(err)
-		}
-		session.shadows[newres.StringRef()] = NewShadow(newres, session.id)
-		modified = true
+	folio := Resource{Kind: "folio", ID: uid}
+	if err := store.Load(&folio); err != nil {
+		return nil, err
 	}
-	if modified {
-		err = hirotok.sessions.Save(session)
-		if err != nil {
-			//whyever that would happen
-			return "", err
+	session.addShadow(profile)
+	session.addShadow(folio)
+	for _, ref := range folio.Value.(Folio) {
+		log.Printf("loading add adding new note to session[%s]: `%s`\n", session.sid, ref.NID)
+		res := Resource{Kind: "note", ID: ref.NID}
+		if err := store.Load(&res); err != nil {
+			return nil, err
 		}
+		session.addShadow(res)
 	}
-	// session created, return new sid and leave consume()
-	return session.id, nil
+	if err = tok.sessions.Save(session); err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
+func (tok *HiroTokens) Consume(token_key, sid string, store *Store) (*Session, error) {
+	log.Printf("consuming token `%s` (for sid `%s`)", token_key, sid)
+	token, err := tok.getToken(token_key)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("loading session (%s) from backend", sid)
+	session, err := tok.sessions.Get(sid)
+	if err != nil {
+		// todo check if session has expired or anyhing
+		// maybe we want to proceed normaly with token
+		// even if provided session is dead for some reason
+		return nil, err
+	}
+	if token.NID == "" {
+		// token is not a note-sharing token. unable to consume
+		return nil, errors.New("received non note-sharing token. aborting")
+	}
+	added, err := tok.addNoteRef(session.uid, token.NID)
+	if err != nil {
+		return nil, err
+	}
+	if added {
+		// notify the session that its folio has changed
+		store.NotifyTaint("folio", session.uid, context{session.sid, session.uid, time.Now()})
+		// TODO: can we address this reset directly to session.sid?
+		store.NotifyReset("note", token.NID, context{session.sid, session.uid, time.Now()})
+		store.NotifyTaint("note", token.NID, context{session.sid, session.uid, time.Now()})
+	}
+	return session, nil
+}
+
+func (tok *HiroTokens) GetUID(sid string) (string, error) {
+	return tok.sessions.GetUID(sid)
+}
+
+func (tok *HiroTokens) getToken(key string) (Token, error) {
+	token := Token{}
+	err := tok.db.QueryRow("SELECT token, uid, nid FROM tokens where token = ? AND consumed_at IS NULL", key).Scan(&token.Key, &token.UID, &token.NID)
+	if err == sql.ErrNoRows {
+		return Token{}, TokenDoesNotexistError(key)
+	} else if err != nil {
+		return Token{}, err
+	}
+	log.Printf("retrieved token from db: %v\n", token)
+	return token, nil
+}
+
+func (tok *HiroTokens) addNoteRef(uid, nid string) (changed bool, err error) {
+	// TODO mayb we can refactor this part to instead of directly modifying the DB
+	// we send an appropriate add-noteref patch down the wire to the folio-store and let the
+	// machinery do the rest
+	res, err := tok.db.Exec("INSERT INTO noterefs (uid, nid, status, role) VALUES (?, ?, 'active', 'active')", uid, nid)
+	if err != nil {
+		return false, err
+	}
+	numChanges, _ := res.RowsAffected()
+	return (numChanges > 0), nil
+}
+
+func (err TokenDoesNotexistError) Error() string {
+	return fmt.Sprintf("token `%s` invalid or expired")
 }

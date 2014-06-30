@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
-    "strings"
 
 	"encoding/json"
 )
@@ -17,11 +17,12 @@ var (
 type UnixTime time.Time
 
 type Note struct {
-	Title     string    `json:"title"`
-	Text      TextValue `json:"text"`
-	Peers     PeerList  `json:"peers"`
-	CreatedAt UnixTime  `json:"-"`
-	CreatedBy User      `json:"-"`
+	Title        string    `json:"title"`
+	Text         TextValue `json:"text"`
+	Peers        PeerList  `json:"peers"`
+	SharingToken string    `json:"sharing_token"`
+	CreatedAt    UnixTime  `json:"created_at"`
+	CreatedBy    User      `json:"created_by"`
 }
 
 type PeerList []Peer
@@ -47,13 +48,8 @@ type NoteDeltaElement struct {
 	Value interface{} `json:"value,omitempty"`
 }
 
-type notePatch struct {
-	property string
-	payload  interface{}
-}
-
 func NewNote(text string) Note {
-	return Note{Text: TextValue(text), CreatedAt: UnixTime(time.Now()), Peers: []Peer{}}
+	return Note{Text: TextValue(text), CreatedAt: UnixTime(time.Time{}), Peers: []Peer{}}
 }
 
 func (t UnixTime) MarshalJSON() ([]byte, error) {
@@ -129,6 +125,10 @@ func (note Note) GetDelta(latest ResourceValue) Delta {
 	if textDelta := note.Text.GetDelta(master.Text).(TextDelta); textDelta.HasChanges() {
 		delta = append(delta, NoteDeltaElement{"delta-text", "", textDelta})
 	}
+	if note.SharingToken != master.SharingToken {
+		delta = append(delta, NoteDeltaElement{"set-token", "", master.SharingToken})
+	}
+
 	// pupulate lookup objects of old versions
 	oldExisting := map[string]Peer{}
 	oldDangling := PeerList{}
@@ -186,65 +186,6 @@ func (note Note) GetDelta(latest ResourceValue) Delta {
 	return delta
 }
 
-func (patch notePatch) Patch(val ResourceValue, store *Store) (ResourceValue, error) {
-	var err error
-	note := val.(Note)
-	newnote := note.Clone().(Note)
-	switch patch.property {
-	case "text":
-		txtpatch, ok := patch.payload.(textPatch)
-		if !ok {
-			return nil, errors.New("invalid textPatch received")
-		}
-		newtxt, err := txtpatch.Patch(note.Text, store)
-		if err != nil {
-			return nil, err
-		}
-		newnote.Text = newtxt.(TextValue)
-		// TODO(flo) update last-edit/-seen of current context's peer-entry
-	case "title":
-		titles := patch.payload.([2]string)
-		if note.Title == titles[0] {
-			newnote.Title = titles[1]
-		}
-		// TODO(flo) update last-edit/-seen of current context's peer-entry
-	case "peers":
-		delta := patch.payload.(NoteDeltaElement)
-		switch delta.Op {
-		case "invite":
-			user := delta.Value.(User)
-			// if user.UID: auto-invite user and swap to current user in `peers`
-			// if user.Email: search if
-			if _, err := getOrCreateUser(&user); err != nil {
-				return nil, err
-			}
-			// TODO(flo) user.inviteToNote(note, context),
-			// actually sending out the invite by the means possible and depending if user is signed up or not
-			newnote.Peers = append(newnote.Peers, Peer{User: user, Role: "invited"})
-			// TODO(flo): add user to requestor's Contacts and send tainted event
-		case "set-cursor":
-			if idx, ok := newnote.Peers.indexFromPath(delta.Path); ok {
-				//TODO(flo) check newnote.Peers[idx].User == context.User
-				newnote.Peers[idx].CursorPosition = delta.Value.(int64)
-			}
-		case "add-peer":
-			if len(newnote.Peers) > 0 {
-				break
-			}
-			peer := delta.Value.(Peer)
-			now := UnixTime(time.Now())
-			peer.LastSeen = &now
-			peer.LastEdit = &now
-			newnote.Peers = append(newnote.Peers, peer)
-		case "rem-peer":
-			if idx, ok := newnote.Peers.indexFromPath(delta.Path); ok {
-				newnote.Peers = append(newnote.Peers[:idx], newnote.Peers[idx+1:]...)
-			}
-		}
-	}
-	return newnote, err
-}
-
 func (delta *NoteDeltaElement) UnmarshalJSON(from []byte) (err error) {
 	tmp := struct {
 		Op       string          `json:"op"`
@@ -295,18 +236,18 @@ func (delta NoteDelta) HasChanges() bool {
 	return len(delta) > 0
 }
 
-func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {
+func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patch, error) {
 	original, ok := to.(Note)
 	if !ok {
 		return nil, nil, errors.New("cannot apply NoteDelta to non Note")
 	}
 	newres := original.Clone().(Note)
-	patches := []Patcher{}
+	patches := []Patch{}
 	for _, diff := range delta {
 		switch diff.Op {
 		case "set-title":
 			newres.Title = diff.Value.(string)
-			patches = append(patches, notePatch{"title", [2]string{original.Title, diff.Value.(string)}})
+			patches = append(patches, Patch{Op: "title", Value: newres.Title, OldValue: original.Title})
 		case "delta-text":
 			tmpText, textPatches, err := diff.Value.(TextDelta).Apply(original.Text)
 			if err != nil {
@@ -314,23 +255,25 @@ func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error)
 				return nil, nil, err
 			}
 			newres.Text = tmpText.(TextValue)
-			for i := range textPatches {
-				patches = append(patches, notePatch{"text", textPatches[i]})
-			}
+			patches = append(patches, textPatches...)
 		case "invite":
 			user, ok := diff.Value.(User)
 			if !ok || diff.Path != "peers/" {
 				break
 			}
 			newres.Peers = append(newres.Peers, Peer{User: user})
-			patches = append(patches, notePatch{"peers", diff})
+			patches = append(patches, Patch{Op: "invite-user", Value: user})
 		case "add-peer":
 			peer, ok := diff.Value.(Peer)
 			if !ok || diff.Path != "peers/" {
 				break
 			}
 			newres.Peers = append(newres.Peers, peer)
-			patches = append(patches, notePatch{"peers", diff})
+			// add-peer patches are currently not supported by the backende. this also means, that
+			// the client will not have the capabilities to perform an add-peer. leaving it in for
+			// changes the client might send, which have already be persisted (e.g. add owner peer
+			// for new note)
+			// Deliberately not creating a patch here
 		case "rem-peer":
 			if !strings.HasPrefix(diff.Path, "peers/") {
 				break
@@ -339,8 +282,8 @@ func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error)
 			if !ok {
 				break
 			}
+			patches = append(patches, Patch{Op: "rem-peer", Path: newres.Peers[idx].User.UID})
 			newres.Peers = append(newres.Peers[:idx], newres.Peers[idx+1:]...)
-			patches = append(patches, notePatch{"peers", diff})
 		case "set-cursor":
 			cursor, ok := diff.Value.(int64)
 			if !ok {
@@ -350,8 +293,11 @@ func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error)
 				break
 			}
 			if idx, ok := newres.Peers.indexFromPath(diff.Path[6:]); ok {
+				patches = append(patches, Patch{Op: "set-cursor",
+					Path:     newres.Peers[idx].User.UID,
+					Value:    cursor,
+					OldValue: newres.Peers[idx].CursorPosition})
 				newres.Peers[idx].CursorPosition = cursor
-				patches = append(patches, notePatch{"peers", diff})
 			}
 		}
 	}

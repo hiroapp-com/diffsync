@@ -2,6 +2,7 @@ package diffsync
 
 import (
 	"log"
+	"strings"
 
 	"encoding/json"
 )
@@ -60,69 +61,38 @@ func (d FolioDelta) HasChanges() bool {
 	return len(d) > 0
 }
 
-func (delta FolioDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {
+func (delta FolioDelta) Apply(to ResourceValue) (ResourceValue, []Patch, error) {
 	log.Printf("received Folio-Delta: %#v", delta)
-	patches := []Patcher{}
+	patches := make([]Patch, 0, len(delta))
 	folio := to.Clone().(Folio)
 	for _, change := range delta {
 		switch change.Op {
 		case "add-noteref":
 			folio = append(folio, change.Value.(NoteRef))
+			patches = append(patches, Patch{Op: "add-noteref", Value: change.Value})
 		case "rem-noteref":
+			if !strings.HasPrefix(change.Path, "nid:") {
+				continue
+			}
 			folio.remove(change.Path)
+			patches = append(patches, Patch{Op: "rem-noteref", Value: change.Path[4:]})
 		//case "set-nid", "swap-noteref": continue // only sent by server, never received
 		case "set-status":
-			if change.Path[:4] != "nid:" {
+			if !strings.HasPrefix(change.Path, "nid:") {
 				continue
 			}
 			if i, ok := folio.indexFromPath(change.Path); ok {
+				patch := Patch{Op: "set-status", Path: change.Path[4:], OldValue: folio[i].Status}
 				folio[i].Status = change.Value.(string)
+				patch.Value = folio[i].Status
+				patches = append(patches, patch)
 			}
 		default:
 			// don't add to patches, we didn't understand the action anyways
 			continue
 		}
-		patches = append(patches, change)
 	}
 	return folio, patches, nil
-}
-
-func (patch FolioChange) Patch(to ResourceValue, store *Store) (ResourceValue, error) {
-	log.Printf("received Folio-Patch: %#v", patch)
-	folio := to.Clone().(Folio)
-	switch patch.Op {
-	case "rem-noteref":
-		folio.remove(patch.Path)
-	case "set-status":
-		switch s := patch.Value.(string); s {
-		case "active", "archived":
-			if i, ok := folio.indexFromPath(patch.Path); ok {
-				folio[i].Status = s
-			}
-		}
-	case "add-noteref":
-		note := patch.Value.(NoteRef)
-		if _, ok := folio.indexFromPath("nid:" + note.NID); ok {
-			// already in our folio,
-			return folio, nil
-		}
-		// TODO(flo) check if note with ID already exists. for no just checking against tmp ids
-		if len(note.NID) < 4 {
-			// save blank note with new NID
-			noteStore := store.OpenNew("note")
-			// TODO(flo) we have to pass the context all the way down to the store, so we know who is the owner
-			res, err := noteStore.CreateEmpty()
-			if err != nil {
-				return nil, err
-			}
-			noteStore.NotifyReset(res.ID)
-			note.tmpNID = note.NID
-			note.NID = res.ID
-		}
-		// TODO(flo) check permissin?
-		folio = append(folio, note)
-	}
-	return folio, nil
 }
 
 func (change *FolioChange) UnmarshalJSON(from []byte) (err error) {
@@ -200,14 +170,6 @@ func (folio Folio) GetDelta(latest ResourceValue) Delta {
 func (folio Folio) String() string {
 	s, _ := json.MarshalIndent(folio, "", "  ")
 	return string(s)
-}
-
-func (folio *Folio) UnmarshalJSON(from []byte) error {
-	return json.Unmarshal(from, folio)
-}
-
-func generateNID() string {
-	return sid_generate()[:10]
 }
 
 func grantRead(sid, nid string) bool {

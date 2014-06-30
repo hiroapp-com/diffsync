@@ -4,6 +4,11 @@ import (
 	"fmt"
 )
 
+type Delta interface {
+	HasChanges() bool
+	Apply(ResourceValue) (ResourceValue, []Patch, error)
+}
+
 type ResourceValue interface {
 	GetDelta(ResourceValue) Delta
 	Clone() ResourceValue

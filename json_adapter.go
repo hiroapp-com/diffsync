@@ -167,7 +167,7 @@ func jsonSession(sess *Session) map[string]interface{} {
 
 	}
 	return map[string]interface{}{
-		"sid":     sess.id,
+		"sid":     sess.sid,
 		"uid":     sess.uid,
 		"profile": profile,
 		"folio":   folio,

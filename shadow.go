@@ -6,16 +6,19 @@ import (
 )
 
 type Shadow struct {
-	sid     string
 	res     Resource
 	backup  ResourceValue
 	pending []Edit
 	SessionClock
 }
 
-func NewShadow(res Resource, sid string) *Shadow {
+type Edit struct {
+	Clock SessionClock `json:"clock"`
+	Delta Delta        `json:"delta"`
+}
+
+func NewShadow(res Resource) *Shadow {
 	return &Shadow{
-		sid:          sid,
 		res:          res,
 		backup:       res.Value.Clone(),
 		pending:      []Edit{},
@@ -44,11 +47,11 @@ func (shadow *Shadow) UpdatePending(store *Store) error {
 	return nil
 }
 
-func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err error) {
+func (shadow *Shadow) SyncIncoming(edit Edit, store *Store, ctx context) (err error) {
 	// Make sure clocks are in sync or recoverable
 	log.Printf("shadow[%s:%p]: sync incoming edit: `%v`\n", shadow.res.StringRef(), &shadow.res, edit)
 	if err := shadow.SessionClock.SyncSvWith(edit.Clock, shadow); err != nil {
-		return false, err
+		return err
 	}
 	pending := make([]Edit, 0, len(shadow.pending))
 	for _, instack := range shadow.pending {
@@ -58,32 +61,29 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err e
 	}
 	shadow.pending = pending
 	if dupe, err := shadow.CheckCV(edit.Clock); dupe {
-		return false, nil
+		return nil
 	} else if err != nil {
 		log.Printf("err sync cv")
-		return false, err
+		return err
 	}
 	if !edit.Delta.HasChanges() {
-		return false, nil
+		return nil
 	}
 	newres, patches, err := edit.Delta.Apply(shadow.res.Value)
 	if err != nil {
-		return false, err
+		return err
 	}
 	shadow.res.Value = newres
 	shadow.backup = newres
 	shadow.IncCv()
 	// send patches to store
 	for i := range patches {
-		hadChanges, err := store.Patch(&shadow.res, patches[i], shadow.sid)
-		if hadChanges {
-			changed = true
-		}
+		err := store.Patch(shadow.res.Ref(), patches[i], ctx)
 		if err != nil {
-			return changed, err
+			return err
 		}
 	}
-	return changed, nil
+	return nil
 }
 
 func (s *Shadow) MarshalJSON() ([]byte, error) {
@@ -96,13 +96,64 @@ func (s *Shadow) MarshalJSON() ([]byte, error) {
 }
 
 func (shadow *Shadow) UnmarshalJSON(from []byte) error {
-	vals := make(map[string]interface{})
-	json.Unmarshal(from, vals)
-	*shadow = Shadow{
-		res:          vals["res"].(Resource),
-		backup:       vals["backup"].(ResourceValue),
-		pending:      vals["pending"].([]Edit),
-		SessionClock: vals["clock"].(SessionClock),
+	// It is rather unfortunate, that we have to implement
+	// such a clumsy JSON unmarshaler, taking care of proper
+	// deserializing into Interface values.
+	// This is merely needed by the sessionstore, because
+	// it saves sessiondata (apart from sid, uid) as a
+	// json serialized blob.
+	// It does not have to be this way. code proper
+	// sessinstore or use better serialization (gobs?)
+	tmp := struct {
+		Res struct {
+			Kind     string          `json:"kind"`
+			ID       string          `json:"id"`
+			RawValue json.RawMessage `json:"val"`
+		} `json:"res"`
+		Backup       json.RawMessage `json:"backup"`
+		Pending      []Edit          `json:"pending"`
+		SessionClock `json:"clock"`
+	}{}
+	if err := json.Unmarshal(from, &tmp); err != nil {
+		return err
+	}
+	shadow.res = Resource{Kind: tmp.Res.Kind, ID: tmp.Res.ID}
+	shadow.pending = tmp.Pending
+	shadow.SessionClock = tmp.SessionClock
+	switch tmp.Res.Kind {
+	case "note":
+		note := NewNote("")
+		backup := NewNote("")
+		if err := json.Unmarshal(tmp.Res.RawValue, &note); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(tmp.Backup, &backup); err != nil {
+			return err
+		}
+		shadow.res.Value = note
+		shadow.backup = backup
+	case "folio":
+		folio := Folio{}
+		backup := Folio{}
+		if err := json.Unmarshal(tmp.Res.RawValue, &folio); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(tmp.Backup, &backup); err != nil {
+			return err
+		}
+		shadow.res.Value = folio
+		shadow.backup = backup
+	case "profile":
+		profile := NewProfile()
+		backup := NewProfile()
+		if err := json.Unmarshal(tmp.Res.RawValue, &profile); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(tmp.Backup, &backup); err != nil {
+			return err
+		}
+		shadow.res.Value = profile
+		shadow.backup = backup
 	}
 	return nil
 }
