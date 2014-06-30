@@ -58,12 +58,13 @@ func (tok *HiroTokens) CreateSession(token_key string, store *Store) (*Session, 
 		}
 	}
 	uid := profile.Value.(Profile).User.UID
+	session := NewSession(sid, uid)
 	if token.NID != "" {
 		if _, err := tok.addNoteRef(uid, token.NID); err != nil {
 			return nil, err
 		}
+		store.NotifyTaint("note", token.NID, context{session.sid, session.uid, time.Now()})
 	}
-	session := NewSession(sid, uid)
 	folio := Resource{Kind: "folio", ID: uid}
 	if err := store.Load(&folio); err != nil {
 		return nil, err
