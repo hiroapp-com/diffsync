@@ -2,7 +2,6 @@ package diffsync
 
 import (
 	"log"
-	"time"
 )
 
 type SessionHub struct {
@@ -10,16 +9,14 @@ type SessionHub struct {
 	runner_done chan string
 	active      map[string]chan<- Event
 	backend     SessionBackend
-	stores      map[string]*Store
 }
 
-func NewSessionHub(backend SessionBackend, stores map[string]*Store) *SessionHub {
+func NewSessionHub(backend SessionBackend) *SessionHub {
 	return &SessionHub{
 		inbox:       make(chan Event),
 		runner_done: make(chan string),
 		active:      map[string]chan<- Event{},
 		backend:     backend,
-		stores:      stores,
 	}
 }
 
@@ -59,7 +56,6 @@ func (hub *SessionHub) route(sid string, event Event) error {
 				log.Printf("session[%s]: could not retrieve sessiondata. aborting.\n", sid)
 				return
 			}
-			session.stores = hub.stores
 			for event := range newinbox {
 				session.Handle(event)
 			}
@@ -102,8 +98,6 @@ func (hub *SessionHub) Run() {
 				//inbox closed, shutdown requested
 				return
 			}
-			//TODO event should get context earlier at creation and must include valid uid
-			event.ctx = context{sid: event.SID, ts: time.Now()}
 			hub.logEvent(event)
 			hub.route(event.SID, event)
 		}
