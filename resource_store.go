@@ -26,9 +26,18 @@ type Store struct {
 	notify   chan<- Event
 	userDB   *sql.DB
 }
+
+type Patch struct {
+	Op       string
+	Path     string
+	Value    interface{}
+	OldValue interface{}
+}
+
 type NoExistError struct {
 	key string
 }
+
 type InvalidValueError struct {
 	key string
 	val interface{}

@@ -12,6 +12,11 @@ type Shadow struct {
 	SessionClock
 }
 
+type Edit struct {
+	Clock SessionClock `json:"clock"`
+	Delta Delta        `json:"delta"`
+}
+
 func NewShadow(res Resource) *Shadow {
 	return &Shadow{
 		res:          res,
