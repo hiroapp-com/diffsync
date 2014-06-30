@@ -20,6 +20,7 @@ type Note struct {
 	Title        string    `json:"title"`
 	Text         TextValue `json:"text"`
 	Peers        PeerList  `json:"peers"`
+	SharingToken string    `json:"sharing_token"`
 	CreatedAt    UnixTime  `json:"created_at"`
 	CreatedBy    User      `json:"created_by"`
 }
@@ -124,6 +125,10 @@ func (note Note) GetDelta(latest ResourceValue) Delta {
 	if textDelta := note.Text.GetDelta(master.Text).(TextDelta); textDelta.HasChanges() {
 		delta = append(delta, NoteDeltaElement{"delta-text", "", textDelta})
 	}
+	if note.SharingToken != master.SharingToken {
+		delta = append(delta, NoteDeltaElement{"set-token", "", master.SharingToken})
+	}
+
 	// pupulate lookup objects of old versions
 	oldExisting := map[string]Peer{}
 	oldDangling := PeerList{}
