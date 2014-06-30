@@ -26,8 +26,6 @@ func (mem *NoteMemBackend) GenID() string {
 	return sid_generate()[:10]
 }
 
-// Always returns a value. if no value exists under key, create a blank object
-// and return that
 func (mem *NoteMemBackend) Get(key string) (ResourceValue, error) {
 	mem.RLock()
 	defer mem.RUnlock()
