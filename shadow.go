@@ -42,11 +42,11 @@ func (shadow *Shadow) UpdatePending(store *Store) error {
 	return nil
 }
 
-func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err error) {
+func (shadow *Shadow) SyncIncoming(edit Edit, store *Store, ctx context) (err error) {
 	// Make sure clocks are in sync or recoverable
 	log.Printf("shadow[%s:%p]: sync incoming edit: `%v`\n", shadow.res.StringRef(), &shadow.res, edit)
 	if err := shadow.SessionClock.SyncSvWith(edit.Clock, shadow); err != nil {
-		return false, err
+		return err
 	}
 	pending := make([]Edit, 0, len(shadow.pending))
 	for _, instack := range shadow.pending {
@@ -56,33 +56,30 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store) (changed bool, err e
 	}
 	shadow.pending = pending
 	if dupe, err := shadow.CheckCV(edit.Clock); dupe {
-		return false, nil
+		return nil
 	} else if err != nil {
 		log.Printf("err sync cv")
-		return false, err
+		return err
 	}
 	if !edit.Delta.HasChanges() {
 		shadow.IncCv()
-		return false, nil
+		return nil
 	}
 	newres, patches, err := edit.Delta.Apply(shadow.res.Value)
 	if err != nil {
-		return false, err
+		return err
 	}
 	shadow.res.Value = newres
 	shadow.backup = newres
 	shadow.IncCv()
 	// send patches to store
 	for i := range patches {
-		hadChanges, err := store.Patch(&shadow.res, patches[i], shadow.sid)
-		if hadChanges {
-			changed = true
-		}
+		err := store.Patch(shadow.res.Ref(), patches[i], ctx)
 		if err != nil {
-			return changed, err
+			return err
 		}
 	}
-	return changed, nil
+	return nil
 }
 
 func (s *Shadow) MarshalJSON() ([]byte, error) {

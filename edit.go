@@ -1,16 +1,15 @@
 package diffsync
 
-//TODO(flo): change signature of Apply back to Patch instead of []Patch
-//TODO(flo): change Patch to Patcher and method to Patch()
-
-// this means, shadows and doc-stores can now work with this defined object
 type Delta interface {
 	HasChanges() bool
-	Apply(ResourceValue) (ResourceValue, []Patcher, error)
+	Apply(ResourceValue) (ResourceValue, []Patch, error)
 }
 
-type Patcher interface {
-	Patch(ResourceValue, *Store) (ResourceValue, error)
+type Patch struct {
+	Op       string
+	Path     string
+	Value    interface{}
+	OldValue interface{}
 }
 
 type Edit struct {

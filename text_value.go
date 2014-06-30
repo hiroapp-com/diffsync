@@ -71,7 +71,7 @@ func (delta TextDelta) HasChanges() bool {
 	return string(delta)[0] != '=' || len(strings.SplitN(string(delta), "\t", 2)) > 1
 }
 
-func (delta TextDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {
+func (delta TextDelta) Apply(to ResourceValue) (ResourceValue, []Patch, error) {
 	original, ok := to.(TextValue)
 	if !ok {
 		return nil, nil, errors.New("Cannot apply delta to non-TextValue type")
@@ -80,7 +80,7 @@ func (delta TextDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	patch := textPatch(dmp.PatchMake(string(original), diffs))
+	patches := []Patch{Patch{Op: "text", Value: dmp.PatchMake(string(original), diffs)}}
 	newres := TextValue(dmp.DiffText2(diffs))
-	return newres, []Patcher{patch}, nil
+	return newres, patches, nil
 }

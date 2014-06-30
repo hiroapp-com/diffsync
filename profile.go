@@ -16,13 +16,24 @@ var (
 )
 
 type User struct {
-	UID      string     `json:"uid,omitempty"`
-	Name     string     `json:"name,omitempty"`
-	Email    string     `json:"email,omitempty"`
-	Phone    string     `json:"phone,omitempty"`
-	Plan     string     `json:"plan,omitempty"`
-	Token    string     `json:"token,omitempty"`
-	SignupAt *time.Time `json:"signup_at,omitempty"`
+	UID           string     `json:"uid,omitempty"`
+	Name          string     `json:"name,omitempty"`
+	Email         string     `json:"email,omitempty"`
+	Phone         string     `json:"phone,omitempty"`
+	Plan          string     `json:"plan,omitempty"`
+	SignupAt      *time.Time `json:"signup_at"`
+	CreatedAt     *time.Time `json:"-"`
+	tmpUID        string     `json:"-"`
+	createdForSID string     `json:"-"`
+}
+
+type Profile struct {
+	User     User   `json:"user"`
+	Contacts []User `json:"contacts"`
+}
+
+func NewProfile() Profile {
+	return Profile{User{}, []User{}}
 }
 
 func (p Profile) Empty() ResourceValue {
@@ -43,15 +54,8 @@ func (u User) pathRef(prefix string) string {
 		return fmt.Sprintf("%s/email:%s", prefix, u.Email)
 	case u.Phone != "":
 		return fmt.Sprintf("%s/phone:%s", prefix, u.Phone)
-	case u.Token != "":
-		return fmt.Sprintf("%s/token:%s", prefix, u.Token)
 	}
 	return "!!invalid"
-}
-
-type Profile struct {
-	User     User   `json:"user"`
-	Contacts []User `json:"contacts"`
 }
 
 func (prof Profile) Clone() ResourceValue {
@@ -89,10 +93,6 @@ func (prof Profile) GetDelta(latest ResourceValue) Delta {
 	if master.User.Phone != prof.User.Phone {
 		delta = append(delta, UserChange{"set-phone", userPath, master.User.Phone})
 	}
-	if master.User.Token != prof.User.Token {
-		delta = append(delta, UserChange{"set-token", userPath, master.User.Token})
-	}
-
 	// pupulate lookup objects of old versions
 	oldExisting := map[string]User{}
 	oldDangling := []User{}
@@ -133,34 +133,6 @@ func (prof Profile) GetDelta(latest ResourceValue) Delta {
 	return delta
 }
 
-func (patch UserChange) Patch(val ResourceValue, store *Store) (ResourceValue, error) {
-	profile := val.(Profile)
-	newProfile := profile.Clone().(Profile)
-	switch patch.Op {
-	case "add-user":
-		if patch.Path != "contacts/" {
-			// noop
-			return newProfile, nil
-		}
-		newContact := patch.Value.(User)
-		if _, err := getOrCreateUser(&newContact); err != nil {
-			return nil, err
-		}
-		if _, exists := indexOfContacts(newContact, profile.Contacts); exists {
-			// contact already exists no need to add again?
-			return newProfile, nil
-		}
-		newProfile.Contacts = append(newProfile.Contacts, newContact)
-	case "set-name":
-		//TODO(flo) more specific check if Path actually references current (context) user
-		if !strings.HasPrefix(patch.Path, "user/") {
-			return nil, fmt.Errorf("cannot change name of user other than current user")
-		}
-		newProfile.User.Name = patch.Value.(string)
-	}
-	return newProfile, nil
-}
-
 func (uc *UserChange) UnmarshalJSON(from []byte) (err error) {
 	tmp := struct {
 		Op       string          `json:"op"`
@@ -191,13 +163,13 @@ func (delta ProfileDelta) HasChanges() bool {
 	return len(delta) > 0
 }
 
-func (delta ProfileDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, error) {
+func (delta ProfileDelta) Apply(to ResourceValue) (ResourceValue, []Patch, error) {
 	original, ok := to.(Profile)
 	if !ok {
 		return nil, nil, errors.New("cannot apply ProfileDelta to non Profile resource")
 	}
 	newres := original.Clone().(Profile)
-	patches := []Patcher{}
+	patches := []Patch{}
 	for _, diff := range delta {
 		switch diff.Op {
 		case "add-user":
@@ -211,50 +183,25 @@ func (delta ProfileDelta) Apply(to ResourceValue) (ResourceValue, []Patcher, err
 				continue
 			}
 			newres.Contacts = append(newres.Contacts, user)
+			patches = append(patches, Patch{Op: diff.Op, Path: "contacts/", Value: user})
 		case "set-name":
 			if !strings.HasPrefix(diff.Path, "user/") {
 				// cannot change name of anyone but own user for now
 				continue
 			}
-			newname, ok := diff.Value.(string)
+			newName, ok := diff.Value.(string)
 			if !ok {
 				// wut not a string? ABORT
 				continue
 			}
-			newres.User.Name = newname
-		default:
-			continue
+			patches = append(patches, Patch{Op: "set-name", Value: newName, OldValue: newres.User.Name})
+			newres.User.Name = newName
 		}
-		patches = append(patches, diff)
 	}
 	return newres, patches, nil
 }
 
 // these functions will be fleshed out and possibly put somewhere else, as soon as we have the proper DB logic
-func generateUID() string {
-	return sid_generate()[:8]
-}
-
-func getOrCreateUser(user *User) (created bool, err error) {
-	switch {
-	case user.UID != "":
-		// TODO(flo): looku user by UID in db
-		// if not exists:
-		fallthrough
-		// if exists, return userinfo
-	case user.Email != "":
-		// TODO(flo): lookup user by email in DB
-		user.UID = generateUID()
-		// TODO(flo): persist to db
-		return true, nil
-	case user.Phone != "":
-		// TODO(flo): lookup user by email in DB
-		user.UID = generateUID()
-		// TODO(flo): persist to db
-		return true, nil
-	}
-	return false, fmt.Errorf("unreachable?")
-}
 
 func indexOfContacts(needle User, haystack []User) (idx int, found bool) {
 	chkFn := func(rhs User) bool {
@@ -264,8 +211,6 @@ func indexOfContacts(needle User, haystack []User) (idx int, found bool) {
 		case needle.Email == rhs.Email && needle.Email != "":
 			return true
 		case needle.Phone == rhs.Phone && needle.Phone != "":
-			return true
-		case needle.Token == rhs.Token && needle.Token != "":
 			return true
 		}
 		return false
