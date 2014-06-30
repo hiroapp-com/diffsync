@@ -2,8 +2,6 @@ package diffsync
 
 import (
 	"fmt"
-	"log"
-	"sync"
 )
 
 const (
@@ -26,6 +24,5 @@ type InvalidSessionId struct {
 }
 
 func (err InvalidSessionId) Error() string {
-    return fmt.Sprintf("invalid session-id: %s", err.sid)
+	return fmt.Sprintf("invalid session-id: %s", err.sid)
 }
-

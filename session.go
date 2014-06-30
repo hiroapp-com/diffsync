@@ -369,12 +369,10 @@ func (sess *Session) Grant(ctx context, action string, res Resource) bool {
 }
 
 func (s *Session) Value() (driver.Value, error) {
-	log.Println("SESSION DB VALUE")
 	return s.MarshalJSON()
 }
 
 func (s *Session) Scan(value interface{}) error {
-	log.Println("SESSION DB SCAN")
 	return s.UnmarshalJSON(value.([]byte))
 }
 
@@ -398,9 +396,7 @@ func (session *Session) UnmarshalJSON(from []byte) error {
 		Tags    []Tag                `json:"tags"`
 		Flushes map[string]time.Time `json:"flushes"`
 	}{}
-	log.Println("P4")
 	json.Unmarshal(from, &vals)
-	log.Println("P5")
 	*session = Session{sid: vals.SID,
 		uid:     vals.UID,
 		tags:    vals.Tags,
@@ -408,7 +404,6 @@ func (session *Session) UnmarshalJSON(from []byte) error {
 		shadows: vals.Shadows,
 		flushes: vals.Flushes,
 	}
-	log.Println("P6")
 	return nil
 }
 

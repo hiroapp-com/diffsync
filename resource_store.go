@@ -5,6 +5,7 @@ package diffsync
 
 import (
 	"errors"
+	"fmt"
 	"log"
 
 	"database/sql"

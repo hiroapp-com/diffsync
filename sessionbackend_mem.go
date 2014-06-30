@@ -1,5 +1,10 @@
 package diffsync
 
+import (
+	"log"
+	"sync"
+)
+
 type MemSessions struct {
 	db       map[string]*Session
 	sessbuff chan *Session
@@ -79,4 +84,3 @@ func (mem *MemSessions) GetSubscriptions(ref Subscription) []Subscription {
 	}
 	return subs
 }
-
