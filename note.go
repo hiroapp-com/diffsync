@@ -54,7 +54,8 @@ func NewNote(text string) Note {
 
 func (t UnixTime) MarshalJSON() ([]byte, error) {
 	ts := time.Time(t).UnixNano()
-	return json.Marshal(ts)
+	// note: we want to output ms, convert ns to ms
+	return json.Marshal(ts / 1e6)
 }
 
 func (t *UnixTime) UnmarshalJSON(from []byte) error {
@@ -62,7 +63,8 @@ func (t *UnixTime) UnmarshalJSON(from []byte) error {
 	if err := json.Unmarshal(from, &ts); err != nil {
 		return err
 	}
-	*t = UnixTime(time.Unix(0, ts))
+	// note: we received ms, convert back to ns
+	*t = UnixTime(time.Unix(0, ts*1e6))
 	return nil
 }
 
