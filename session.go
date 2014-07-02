@@ -231,7 +231,9 @@ func (sess *Session) flush(store *Store) {
 			continue
 		}
 		log.Printf("session[%s]: flushin' tainted resource: %s\n", sess.sid, res)
-		shadow.UpdatePending(store)
+		if modified := shadow.UpdatePending(store); !modified {
+			return
+		}
 		newTag := sess.createTag(res.StringRef())
 		event := Event{Name: "res-sync", Tag: newTag, SID: sess.sid, Res: res.Ref(), Changes: shadow.pending}
 		if !sess.push_client(event) {
