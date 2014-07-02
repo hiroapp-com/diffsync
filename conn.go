@@ -27,7 +27,7 @@ func NewConn(hub chan<- Event, consumer TokenConsumer, adapter MessageAdapter, s
 }
 
 func (conn *Conn) ClientEvent(event Event) {
-	ctx := context{ts: time.Now()}
+	event.ctx = context{ts: time.Now()}
 	switch event.Name {
 	case "session-create":
 		log.Printf("conn[%p]: received `session-create` with token: `%s`\n", conn, event.Token)
@@ -37,7 +37,7 @@ func (conn *Conn) ClientEvent(event Event) {
 			//todo tell to_client about the error
 			return
 		}
-		ctx.uid = session.uid
+		event.ctx.uid = session.uid
 		event.SID = session.sid
 		conn.sid = session.sid
 	case "token-consume":
@@ -48,15 +48,17 @@ func (conn *Conn) ClientEvent(event Event) {
 			//todo tell to_client about the error
 			return
 		}
-		ctx.uid = session.uid
+		event.ctx.uid = session.uid
+		conn.sid = session.sid
 	default:
 		uid, err := conn.TokenConsumer.GetUID(event.SID)
 		if err != nil {
 			return
 		}
-		ctx.uid = uid
+		event.ctx.uid = uid
+		conn.sid = event.SID
 	}
-	ctx.sid = conn.sid
+	event.ctx.sid = event.SID
 	event.store = conn.store
 	event.client = conn.to_client
 	conn.sessionhub <- event
