@@ -82,7 +82,7 @@ func (pl *PeerList) remove(path string) {
 func (pl PeerList) indexFromPath(path string) (int, bool) {
 	var checkFn func(Peer) bool
 	switch {
-	case len(path) > 4 && path[:4] != "uid:":
+	case len(path) > 4 && path[:4] == "uid:":
 		checkFn = func(p Peer) bool {
 			return p.User.UID == path[4:]
 		}
