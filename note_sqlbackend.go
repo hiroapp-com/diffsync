@@ -59,6 +59,7 @@ func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 }
 
 func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx context) error {
+	log.Printf("note-backend: received patch for note[%s]: %v", nid, patch)
 	switch patch.Op {
 	case "text":
 		// patch.Path empty
@@ -102,9 +103,9 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 		// patch.Value contains int64 with new cursor position
 		// patch.OldValue contains int64 value of prior known value, usable for CAS
 		if patch.Path != ctx.uid {
-			return fmt.Errorf("notesqlbackend: cannot set cursor for other user than context user")
+			return fmt.Errorf("notesqlbackend: cannot set cursor for other user than context user. ctx.uid:%s peer-uid: %s", ctx.uid, patch.Path)
 		}
-		_, err := backend.db.Exec("UPDATE noteref SET cursor_pos = ? WHERE nid = ? AND uid = ? AND cursor_pos = ?", patch.Value.(int64), nid, patch.Path, patch.OldValue.(int64))
+		_, err := backend.db.Exec("UPDATE noterefs SET cursor_pos = ? WHERE nid = ? AND uid = ? AND cursor_pos = ?", patch.Value.(int64), nid, patch.Path, patch.OldValue.(int64))
 		if err != nil {
 			return err
 		}
@@ -112,7 +113,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 		// patch.Path contains UID of peer to remove
 		// patch.Value empty
 		// patch.OldValue empty
-		_, err := backend.db.Exec("DELETE FROM noteref WHERE nid = ? AND uid = ?", nid, patch.Path)
+		_, err := backend.db.Exec("DELETE FROM noterefs WHERE nid = ? AND uid = ?", nid, patch.Path)
 		if err != nil {
 			return err
 		}
