@@ -31,7 +31,7 @@ func (shadow *Shadow) Rollback() {
 	shadow.pending = []Edit{}
 }
 
-func (shadow *Shadow) UpdatePending(store *Store) error {
+func (shadow *Shadow) UpdatePending(store *Store) bool {
 	res := shadow.res.Ref()
 	log.Printf("shadow[%s:%p]: calculating new delta and upate pending-queue\n", res.StringRef(), &res)
 	_ = store.Load(&res)
@@ -40,11 +40,12 @@ func (shadow *Shadow) UpdatePending(store *Store) error {
 	delta := shadow.res.Value.GetDelta(res.Value)
 	log.Printf("shadow[%s:%p]: found delta: `%s`\n", res.StringRef(), &res, delta)
 	shadow.pending = append(shadow.pending, Edit{shadow.SessionClock.Clone(), delta})
-	if delta.HasChanges() {
-		shadow.res = res
-		shadow.IncSv()
+	if !delta.HasChanges() {
+		return false
 	}
-	return nil
+	shadow.res = res
+	shadow.IncSv()
+	return true
 }
 
 func (shadow *Shadow) SyncIncoming(edit Edit, store *Store, ctx context) (err error) {
@@ -110,16 +111,19 @@ func (shadow *Shadow) UnmarshalJSON(from []byte) error {
 			ID       string          `json:"id"`
 			RawValue json.RawMessage `json:"val"`
 		} `json:"res"`
-		Backup       json.RawMessage `json:"backup"`
-		Pending      []Edit          `json:"pending"`
+		Backup  json.RawMessage `json:"backup"`
+		Pending []struct {
+			Clock    SessionClock    `json:"clock"`
+			RawDelta json.RawMessage `json:"delta"`
+		} `json:"pending"`
 		SessionClock `json:"clock"`
 	}{}
 	if err := json.Unmarshal(from, &tmp); err != nil {
 		return err
 	}
 	shadow.res = Resource{Kind: tmp.Res.Kind, ID: tmp.Res.ID}
-	shadow.pending = tmp.Pending
 	shadow.SessionClock = tmp.SessionClock
+	shadow.pending = make([]Edit, len(tmp.Pending))
 	switch tmp.Res.Kind {
 	case "note":
 		note := NewNote("")
@@ -132,6 +136,13 @@ func (shadow *Shadow) UnmarshalJSON(from []byte) error {
 		}
 		shadow.res.Value = note
 		shadow.backup = backup
+		for i := range tmp.Pending {
+			delta := NoteDelta{}
+			if err := json.Unmarshal(tmp.Pending[i].RawDelta, &delta); err != nil {
+				return err
+			}
+			shadow.pending[i] = Edit{Clock: tmp.Pending[i].Clock, Delta: delta}
+		}
 	case "folio":
 		folio := Folio{}
 		backup := Folio{}
@@ -143,6 +154,13 @@ func (shadow *Shadow) UnmarshalJSON(from []byte) error {
 		}
 		shadow.res.Value = folio
 		shadow.backup = backup
+		for i := range tmp.Pending {
+			delta := FolioDelta{}
+			if err := json.Unmarshal(tmp.Pending[i].RawDelta, &delta); err != nil {
+				return err
+			}
+			shadow.pending[i] = Edit{Clock: tmp.Pending[i].Clock, Delta: delta}
+		}
 	case "profile":
 		profile := NewProfile()
 		backup := NewProfile()
@@ -154,6 +172,13 @@ func (shadow *Shadow) UnmarshalJSON(from []byte) error {
 		}
 		shadow.res.Value = profile
 		shadow.backup = backup
+		for i := range tmp.Pending {
+			delta := ProfileDelta{}
+			if err := json.Unmarshal(tmp.Pending[i].RawDelta, &delta); err != nil {
+				return err
+			}
+			shadow.pending[i] = Edit{Clock: tmp.Pending[i].Clock, Delta: delta}
+		}
 	}
 	return nil
 }
