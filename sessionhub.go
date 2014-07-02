@@ -58,8 +58,11 @@ func (hub *SessionHub) route(sid string, event Event) error {
 			}
 			for event := range newinbox {
 				session.Handle(event)
+				// saving after every event might be a bit aggressive, implement self resetting timers
+				hub.backend.Save(session)
 			}
 			log.Println("sessionid: shutting down inbox runner for sid ", sid)
+			hub.backend.Save(session)
 		}()
 		hub.active[sid] = newinbox
 		inbox = newinbox
