@@ -25,6 +25,7 @@ func (store *SQLSessions) Get(sid string) (*Session, error) {
 		store.Release(session)
 		return nil, InvalidSessionId{sid, SESSION_NOTEXIST}
 	} else if err != nil {
+		store.Release(session)
 		return nil, err
 	}
 	return session, nil
