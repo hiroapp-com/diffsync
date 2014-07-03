@@ -70,7 +70,7 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, store *Store, ctx 
 		note := patch.Value.(NoteRef)
 		// TODO(flo) check if note with ID already exists. for no just checking against tmp ids
 		role := "active"
-		if len(note.NID) < 4 {
+		if len(note.NID) < 5 {
 			// save blank note with new NID
 			newnote, err := store.NewResource("note", ctx)
 			if err != nil {
