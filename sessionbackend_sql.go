@@ -73,7 +73,7 @@ func (store *SQLSessions) allocateSession() *Session {
 	var sess *Session
 	select {
 	case sess = <-store.sessbuff:
-		log.Printf("Reusing session-pointer: %v", sess)
+		log.Printf("Reusing session-pointer: %p", sess)
 	default:
 		sess = new(Session)
 	}

@@ -1,6 +1,7 @@
 package diffsync
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -14,11 +15,30 @@ var (
 	_ = log.Print
 )
 
+const (
+	SESSION_NOTEXIST = iota
+	SESSION_EXPIRED
+	SESSION_REVOKED
+)
+
+type SessionBackend interface {
+	Get(string) (*Session, error)
+	GetUID(string) (string, error)
+	Save(*Session) error
+	Delete(string) error
+	Release(*Session)
+}
+
 type Auther interface {
 	Grant(context, string, Resource)
 }
 
 type ResourceRegistry map[string]map[string]bool
+
+type InvalidSessionId struct {
+	sid    string
+	reason int
+}
 
 type Tag struct {
 	ref      string
@@ -407,6 +427,10 @@ func (session *Session) UnmarshalJSON(from []byte) error {
 		flushes: vals.Flushes,
 	}
 	return nil
+}
+
+func (err InvalidSessionId) Error() string {
+	return fmt.Sprintf("invalid session-id: %s", err.sid)
 }
 
 func sid_generate() string {
