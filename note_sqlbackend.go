@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"crypto/rand"
+	"crypto/sha512"
 	"database/sql"
 	"encoding/hex"
 
@@ -28,7 +29,7 @@ func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 	note := NewNote("")
 	var txt, createdBy string
 	var createdAt time.Time
-	err := backend.db.QueryRow("SELECT title, txt, (select token from tokens where uid = '' and nid = ? limit 1) as sharing_token, created_at, created_by FROM notes WHERE nid = ?", key, key).Scan(&note.Title, &txt, &note.SharingToken, &createdAt, &createdBy)
+	err := backend.db.QueryRow("SELECT title, txt, sharing_token, created_at, created_by FROM notes WHERE nid = ?", key).Scan(&note.Title, &txt, &note.SharingToken, &createdAt, &createdBy)
 	switch {
 	case err == sql.ErrNoRows:
 		return nil, NoExistError{key}
@@ -121,23 +122,18 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 	return nil
 }
 
-func (backend NoteSQLBackend) createSharingToken(nid string) error {
-	// cleanup, fire and forget
-	backend.db.Exec("DELETE FROM tokens WHERE uid = '' and nid = ?", nid)
-	// create token
-	token := generateToken()
-	_, err := backend.db.Exec("INSERT INTO tokens (token, uid, nid) VALUES (?, '', ?)", token, nid)
-	return err
-}
-
 func (backend NoteSQLBackend) CreateEmpty(ctx context) (string, error) {
 	note := NewNote("")
 	nid := generateNID()
-	_, err := backend.db.Exec("INSERT INTO notes (nid, title, txt, created_by) VALUES (?, ?, ?, ?)", nid, note.Title, string(note.Text), ctx.uid)
+	token, hashed := generateToken()
+	_, err := backend.db.Exec("INSERT INTO notes (nid, title, txt, sharing_token, created_by) VALUES (?, ?, ?, ?, ?)", nid, note.Title, string(note.Text), token, ctx.uid)
 	if err != nil {
 		return "", err
 	}
-	if err = backend.createSharingToken(nid); err != nil {
+	// cleanup, fire and forget
+	backend.db.Exec("DELETE FROM tokens WHERE uid = '' and nid = ? and kind = 'share'", nid)
+	// create token
+	if _, err := backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES (?, 'share', '', ?)", hashed, nid); err != nil {
 		return "", nil
 	}
 	return nid, nil
@@ -179,7 +175,7 @@ func generateNID() string {
 	return sid_generate()[:10]
 }
 
-func generateToken() string {
+func generateToken() (string, string) {
 	uuid := make([]byte, 16)
 	if n, err := rand.Read(uuid); err != nil || n != len(uuid) {
 		panic(err)
@@ -187,5 +183,9 @@ func generateToken() string {
 	// RFC 4122
 	uuid[8] = 0x80 // variant bits
 	uuid[4] = 0x40 // v4
-	return hex.EncodeToString(uuid)
+	plain := hex.EncodeToString(uuid)
+	h := sha512.New()
+	h.Write(uuid)
+	hashed := hex.EncodeToString(h.Sum(nil))
+	return plain, hashed
 }

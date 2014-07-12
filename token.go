@@ -1,9 +1,12 @@
 package diffsync
 
 import (
+	"crypto/sha512"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"strings"
 	"time"
 
 	"database/sql"
@@ -16,11 +19,14 @@ type TokenConsumer interface {
 }
 
 type Token struct {
-	Key        string `sql:"token"`
-	UID        string `sql:"uid"`
-	NID        string `sql:"nid"`
-	CreatedAt  string `sql:"created_at"`
-	ConsumedAt string `sql:"consumed_at"`
+	Key        string
+	Kind       string
+	UID        string
+	NID        string
+	Email      string
+	Phone      string
+	CreatedAt  string
+	ConsumedAt string
 }
 
 type TokenDoesNotexistError string
@@ -122,8 +128,12 @@ func (tok *HiroTokens) GetUID(sid string) (string, error) {
 }
 
 func (tok *HiroTokens) getToken(key string) (Token, error) {
+	h := sha512.New()
+	io.WriteString(h, key)
+	hashed_key := fmt.Sprintf("%x", h.Sum(nil))
+	log.Println("Looking for token with hash %s", hashed_key)
 	token := Token{}
-	err := tok.db.QueryRow("SELECT token, uid, nid FROM tokens where token = ? AND consumed_at IS NULL", key).Scan(&token.Key, &token.UID, &token.NID)
+	err := tok.db.QueryRow("SELECT token, kind, uid, nid, email, phone FROM tokens where token = ? AND consumed_at IS NULL", hashed_key).Scan(&token.Key, &token.Kind, &token.UID, &token.NID, &token.Email, &token.Phone)
 	if err == sql.ErrNoRows {
 		return Token{}, TokenDoesNotexistError(key)
 	} else if err != nil {
