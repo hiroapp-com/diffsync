@@ -31,7 +31,7 @@ func (conn *Conn) ClientEvent(event Event) {
 	switch event.Name {
 	case "session-create":
 		log.Printf("conn[%p]: received `session-create` with token: `%s`\n", conn, event.Token)
-		session, err := conn.TokenConsumer.CreateSession(event.Token, conn.store)
+		session, err := conn.TokenConsumer.CreateSession(event.Token, event.SID, conn.store)
 		if err != nil {
 			log.Printf("conn[%p]: token cannot be consumed, aborting session-create. err: %s\n", conn, err)
 			//todo tell to_client about the error

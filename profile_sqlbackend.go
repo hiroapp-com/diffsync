@@ -21,7 +21,7 @@ func NewProfileSQLBackend(db *sql.DB) ProfileSQLBackend {
 func (backend ProfileSQLBackend) Get(uid string) (ResourceValue, error) {
 	profile := NewProfile()
 	u := User{}
-	if err := backend.db.QueryRow("SELECT uid, name, email, phone, plan, signup_at FROM users WHERE uid = ?", uid).Scan(&u.UID, &u.Name, &u.Email, &u.Phone, &u.Plan, &u.SignupAt); err != nil {
+	if err := backend.db.QueryRow("SELECT uid, name, tier, email, phone, plan, signup_at FROM users WHERE uid = ?", uid).Scan(&u.UID, &u.Name, &u.Tier, &u.Email, &u.Phone, &u.Plan, &u.SignupAt); err != nil {
 		return nil, err
 	}
 	profile.User = u
