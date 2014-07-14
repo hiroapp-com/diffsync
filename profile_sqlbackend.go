@@ -55,7 +55,7 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, store *Store, ct
 			return nil
 		}
 		userRef := patch.Value.(User)
-		user, err := getOrCreateUser(userRef, backend.db)
+		user, _, err := getOrCreateUser(userRef, backend.db)
 		if err != nil {
 			return err
 		}
@@ -75,28 +75,28 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, store *Store, ct
 }
 
 func (backend ProfileSQLBackend) CreateEmpty(ctx context) (string, error) {
-	user, err := getOrCreateUser(User{createdForSID: ctx.sid}, backend.db)
+	user, _, err := getOrCreateUser(User{createdForSID: ctx.sid}, backend.db)
 	return user.UID, err
 }
 
-func getOrCreateUser(userRef User, db *sql.DB) (User, error) {
+func getOrCreateUser(userRef User, db *sql.DB) (user User, created bool, err error) {
 	txn, err := db.Begin()
 	if err != nil {
-		return User{}, err
+		return
 	}
 	var row *sql.Row
 	switch {
 	case userRef.UID != "":
-		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from user where uid = ?", userRef.UID)
+		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where uid = ?", userRef.UID)
 	case userRef.Email != "" && userRef.Phone != "":
-		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from user where email = ? OR phone = ?", userRef.Email, userRef.Phone)
+		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where email = ? OR phone = ?", userRef.Email, userRef.Phone)
 	case userRef.Email != "":
-		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from user where email = ?", userRef.Email)
+		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where email = ?", userRef.Email)
 	case userRef.Phone != "":
-		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from user where phone = ?", userRef.Email, userRef.Phone)
+		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where phone = ?", userRef.Email, userRef.Phone)
 	default:
 	}
-	user := User{}
+	user = User{}
 	if row == nil {
 		err = sql.ErrNoRows
 	} else {
@@ -108,19 +108,20 @@ func getOrCreateUser(userRef User, db *sql.DB) (User, error) {
 		user = userRef
 		user.tmpUID = user.UID
 		user.UID = generateUID()
-		_, err := txn.Exec("INSERT INTO users (uid, tmp_uid, name, email, phone, created_for_sid) values (?, ?, ?, ?, ?, ?)", user.UID, user.tmpUID, user.Name, user.Email, user.Phone, user.createdForSID)
+		_, err = txn.Exec("INSERT INTO users (uid, tmp_uid, name, email, phone, created_for_sid) values (?, ?, ?, ?, ?, ?)", user.UID, user.tmpUID, user.Name, user.Email, user.Phone, user.createdForSID)
 		if err != nil {
 			txn.Rollback()
 			log.Printf("error while creatting new user: %s\n", err)
-			return User{}, err
+			return
 		}
+		created = true
 	} else if err != nil {
 		txn.Rollback()
 		log.Printf("error while fetching existing user: %s\n", err)
-		return User{}, err
+		return
 	}
 	txn.Commit()
-	return user, nil
+	return
 }
 
 func generateUID() string {
