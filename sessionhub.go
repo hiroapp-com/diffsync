@@ -59,9 +59,8 @@ func (hub *SessionHub) route(sid string, event Event) error {
 			for event := range newinbox {
 				session.Handle(event)
 				// saving after every event might be a bit aggressive, implement self resetting timers
-				hub.backend.Save(session)
 			}
-			log.Println("sessionid: shutting down inbox runner for sid ", sid)
+			log.Printf("session[%s]: inbox shut down. persisting session and leaving event loop\n", sid)
 			hub.backend.Save(session)
 		}()
 		hub.active[sid] = newinbox
@@ -99,6 +98,9 @@ func (hub *SessionHub) Run() {
 		case event, ok := <-hub.inbox:
 			if !ok {
 				//inbox closed, shutdown requested
+				for sid := range hub.active {
+					close(hub.active[sid])
+				}
 				return
 			}
 			hub.logEvent(event)
