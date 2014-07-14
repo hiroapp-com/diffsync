@@ -1,10 +1,11 @@
 package diffsync
 
 import (
+	"crypto/rand"
 	"crypto/sha512"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"strings"
 	"time"
@@ -49,7 +50,7 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 	sid := sid_generate()
 	var profile Resource
 	switch token.Kind {
-	case "anon", "share":
+	case "anon", "share-email", "share-url":
 		// anon token
 		// create new blank user
 		profile, err = store.NewResource("profile", context{sid: sid})
@@ -183,15 +184,16 @@ func (tok *HiroTokens) GetUID(sid string) (string, error) {
 	return tok.sessions.GetUID(sid)
 }
 
-func (tok *HiroTokens) getToken(key string) (Token, error) {
+func (tok *HiroTokens) getToken(plain string) (Token, error) {
+	plainBytes, _ := hex.DecodeString(plain)
 	h := sha512.New()
-	io.WriteString(h, key)
-	hashed_key := fmt.Sprintf("%x", h.Sum(nil))
-	log.Println("Looking for token with hash %s", hashed_key)
+	h.Write(plainBytes)
+	hashed := hex.EncodeToString(h.Sum(nil))
+	log.Println("Looking for token (byte: `%v`) with hash %s", tok, hashed)
 	token := Token{}
-	err := tok.db.QueryRow("SELECT token, kind, uid, nid, email, phone FROM tokens where token = ? AND consumed_at IS NULL", hashed_key).Scan(&token.Key, &token.Kind, &token.UID, &token.NID, &token.Email, &token.Phone)
+	err := tok.db.QueryRow("SELECT token, kind, uid, nid, email, phone FROM tokens where token = ? AND consumed_at IS NULL", hashed).Scan(&token.Key, &token.Kind, &token.UID, &token.NID, &token.Email, &token.Phone)
 	if err == sql.ErrNoRows {
-		return Token{}, TokenDoesNotexistError(key)
+		return Token{}, TokenDoesNotexistError(plain)
 	} else if err != nil {
 		return Token{}, err
 	}
@@ -287,4 +289,19 @@ func (tok *HiroTokens) sweepInvites(uid, kind, to_verify string) (invitedNIDs []
 
 func (err TokenDoesNotexistError) Error() string {
 	return fmt.Sprintf("token `%s` invalid or expired")
+}
+
+func generateToken() (string, string) {
+	uuid := make([]byte, 16)
+	if n, err := rand.Read(uuid); err != nil || n != len(uuid) {
+		panic(err)
+	}
+	// RFC 4122
+	uuid[8] = 0x80 // variant bits
+	uuid[4] = 0x40 // v4
+	plain := hex.EncodeToString(uuid)
+	h := sha512.New()
+	h.Write(uuid)
+	hashed := hex.EncodeToString(h.Sum(nil))
+	return plain, hashed
 }

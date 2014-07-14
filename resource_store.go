@@ -4,7 +4,6 @@ package diffsync
 // and thread-safety
 
 import (
-	"errors"
 	"fmt"
 	"log"
 
@@ -23,8 +22,15 @@ type ResourceBackend interface {
 
 type Store struct {
 	backends map[string]ResourceBackend
+	comm     chan<- CommRequest
 	notify   chan<- Event
 	userDB   *sql.DB
+}
+
+type CommRequest struct {
+	uid  string
+	kind string
+	data map[string]string
 }
 
 type Patch struct {
@@ -43,19 +49,12 @@ type InvalidValueError struct {
 	val interface{}
 }
 
-func NewStore(userDB *sql.DB, notify chan<- Event) *Store {
-	return &Store{backends: map[string]ResourceBackend{}, userDB: userDB, notify: notify}
+func NewStore(userDB *sql.DB, notify chan<- Event, comm chan<- CommRequest) *Store {
+	return &Store{backends: map[string]ResourceBackend{}, userDB: userDB, notify: notify, comm: comm}
 }
 
 func (store *Store) Mount(kind string, backend ResourceBackend) {
 	store.backends[kind] = backend
-}
-
-func (store *Store) GetOrCreateUser(userRef User) (User, error) {
-	if store.userDB == nil {
-		return User{}, errors.New("store: user-db not set, cannot query or create users")
-	}
-	return getOrCreateUser(userRef, store.userDB)
 }
 
 func (store *Store) NewResource(kind string, ctx context) (Resource, error) {
@@ -104,6 +103,33 @@ func (store *Store) NotifyTaint(kind, id string, ctx context) {
 	default:
 		log.Printf("store: cannot send `res-taint`, notify channel not writable.\n")
 	}
+}
+
+func (store *Store) SendInvitation(user User, nid string) {
+	//TODO find better place for this method
+	txn, err := store.userDB.Begin() // TODO(flo) rename userDB > db OR find better place for this
+	if err != nil {
+		// cannot process right now
+		return
+	}
+	token, hashed := generateToken()
+	if user.Email == "" {
+		//NOTE for now only email-communication is supported. add twilio here!
+		txn.Rollback()
+		return
+	}
+	_, err = txn.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES (?, 'share-email', ?, ?)", hashed, user.UID, nid)
+	if err != nil {
+		txn.Rollback()
+		return
+	}
+	select {
+	case store.comm <- CommRequest{user.UID, "email-invite", map[string]string{"token": token}}:
+	default:
+		txn.Rollback()
+		return
+	}
+	txn.Commit()
 }
 
 func (err InvalidValueError) Error() string {

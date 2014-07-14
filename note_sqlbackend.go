@@ -5,10 +5,7 @@ import (
 	"log"
 	"time"
 
-	"crypto/rand"
-	"crypto/sha512"
 	"database/sql"
-	"encoding/hex"
 
 	DMP "github.com/sergi/go-diff/diffmatchpatch"
 )
@@ -90,15 +87,23 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 		// patch.Value contains User object (maybe without UID)
 		// patch.OldValue empty
 		userRef := patch.Value.(User)
-		user, err := getOrCreateUser(userRef, backend.db)
+		user, _, err := getOrCreateUser(userRef, backend.db)
 		if err != nil {
 			return err
 		}
 		// fire and forgeeeeet
-		backend.db.Exec("INSERT INTO noterefs (nid, uid, role) VALUES(?, ?, 'invited')", nid, user.UID)
 		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", ctx.uid, user.UID)
 		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", user.UID, ctx.uid)
-		// taint ctx.uid's and user.ID's profile && nid-note
+		res, err := backend.db.Exec("INSERT INTO noterefs (nid, uid, role) VALUES(?, ?, 'invited')", nid, user.UID)
+		if err != nil {
+			return fmt.Errorf("could not create note-ref for invitee: nid: %s, uid: %s", nid, user.UID)
+		}
+		if affected, _ := res.RowsAffected(); affected > 0 {
+			store.SendInvitation(user, nid)
+		}
+		store.NotifyReset("note", nid, ctx) // TODO address SID directly
+		store.NotifyTaint("profile", ctx.uid, ctx)
+		store.NotifyTaint("profile", user.UID, ctx)
 	case "set-cursor":
 		// patch.Path contains UID of peer whose cursor to set
 		// patch.Value contains int64 with new cursor position
@@ -133,7 +138,7 @@ func (backend NoteSQLBackend) CreateEmpty(ctx context) (string, error) {
 	// cleanup, fire and forget
 	backend.db.Exec("DELETE FROM tokens WHERE uid = '' and nid = ? and kind = 'share'", nid)
 	// create token
-	if _, err := backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES (?, 'share', '', ?)", hashed, nid); err != nil {
+	if _, err := backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES (?, 'share-url', '', ?)", hashed, nid); err != nil {
 		return "", nil
 	}
 	return nid, nil
@@ -173,19 +178,4 @@ func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx context) (e
 
 func generateNID() string {
 	return sid_generate()[:10]
-}
-
-func generateToken() (string, string) {
-	uuid := make([]byte, 16)
-	if n, err := rand.Read(uuid); err != nil || n != len(uuid) {
-		panic(err)
-	}
-	// RFC 4122
-	uuid[8] = 0x80 // variant bits
-	uuid[4] = 0x40 // v4
-	plain := hex.EncodeToString(uuid)
-	h := sha512.New()
-	h.Write(uuid)
-	hashed := hex.EncodeToString(h.Sum(nil))
-	return plain, hashed
 }
