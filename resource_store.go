@@ -113,18 +113,29 @@ func (store *Store) SendInvitation(user User, nid string) {
 		return
 	}
 	token, hashed := generateToken()
-	if user.Email == "" {
-		//NOTE for now only email-communication is supported. add twilio here!
-		txn.Rollback()
-		return
-	}
-	_, err = txn.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES (?, 'share-email', ?, ?)", hashed, user.UID, nid)
-	if err != nil {
+	commReq := CommRequest{uid: user.UID, data: map[string]string{"token": token}}
+	switch {
+	case user.Phone != "":
+		// TODO(flo) do we want to insert user.Phone into the token already?
+		commReq.kind = "phone-invite"
+		_, err = txn.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES (?, 'share-phone', ?, ?)", hashed, user.UID, nid)
+		if err != nil {
+			txn.Rollback()
+			return
+		}
+	case user.Email != "":
+		commReq.kind = "email-invite"
+		_, err = txn.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES (?, 'share-email', ?, ?)", hashed, user.UID, nid)
+		if err != nil {
+			txn.Rollback()
+			return
+		}
+	default:
 		txn.Rollback()
 		return
 	}
 	select {
-	case store.comm <- CommRequest{user.UID, "email-invite", map[string]string{"token": token}}:
+	case store.comm <- commReq:
 	default:
 		txn.Rollback()
 		return

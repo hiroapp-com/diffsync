@@ -89,11 +89,11 @@ func getOrCreateUser(userRef User, db *sql.DB) (user User, created bool, err err
 	case userRef.UID != "":
 		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where uid = ?", userRef.UID)
 	case userRef.Email != "" && userRef.Phone != "":
-		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where email = ? OR phone = ?", userRef.Email, userRef.Phone)
+		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where (email = ? AND email_status IN ('verified', 'invited')) OR (phone = ? AND phone_status IN ('verified', 'invited'))", userRef.Email, userRef.Phone)
 	case userRef.Email != "":
-		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where email = ?", userRef.Email)
+		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where email = ? AND phone_status IN ('verified', 'invited')", userRef.Email)
 	case userRef.Phone != "":
-		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where phone = ?", userRef.Email, userRef.Phone)
+		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where phone = ? AND phone_status IN ('verified', 'invited')", userRef.Phone)
 	default:
 	}
 	user = User{}

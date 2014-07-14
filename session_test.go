@@ -162,6 +162,52 @@ func (suite *SessionTests) TestVisitorWithEmailShareToken() {
 	}
 }
 
+func (suite *SessionTests) TestVisitorWithPhoneShareToken() {
+	// first spawn an anon session that creates the shared token
+	connA := suite.srv.NewConn()
+	token, err := suite.srv.anonToken()
+	suite.Nil(err, "could not get anon token")
+	connA.ClientEvent(Event{Name: "session-create", Token: token})
+	resp := suite.awaitResponse(connA.ToClient(), "session-create response did not arrive")
+	sessA := resp.Session
+	// create new note
+	noteRes := suite.addNote(connA, sessA)
+	if !suite.NotEqual(Resource{}, noteRes) {
+		suite.T().Fatal("could not add resource")
+	}
+	connA.ClientEvent(Event{Name: "res-sync",
+		SID:     sessA.sid,
+		Tag:     "test",
+		Res:     Resource{Kind: "note", ID: noteRes.ID},
+		Changes: []Edit{{SessionClock{0, 1, 0}, NoteDelta{{"invite", "peers/", User{Phone: "+805111111"}}}}}})
+	resp = suite.awaitResponse(connA.ToClient(), "res-sync response (invite via email) did not arrive")
+
+	// check for emailtoken
+	var req CommRequest
+	select {
+	case req = <-suite.comm:
+	case <-time.After(5 * time.Second):
+		suite.T().Fatal("comm-request after phone invite did not arrive in time")
+	}
+	suite.Equal("phone-invite", req.kind, "CommRequest has wrong kind. expected `phone-invite`, but got `%s`", req, req.kind)
+	if suite.NotEmpty(req.data["token"], "Token missing in CommRequest atfer invite") {
+		// now use the token to create a new anon-user
+		connB := suite.srv.NewConn()
+		connB.ClientEvent(Event{Name: "session-create", Token: req.data["token"]})
+		resp = suite.awaitResponse(connB.ToClient(), "session-create response (of invitee) did not arrive")
+		sessB := resp.Session
+		// now check if sessB has all it should have
+		suite.Equal(3, len(sessB.shadows), "anon user should have 3 shadows (profile, folio, note), but has %d", len(sessB.shadows))
+		shadow := extractShadow(sessB, "folio")
+		if suite.NotNil(shadow, "returned session did not contain a folio shadow") {
+			folio := shadow.res.Value.(Folio)
+			if suite.Equal(1, len(folio), "folio has the wrong number of notes. expected 1, got %s", len(folio)) {
+				suite.Equal(noteRes.ID, folio[0].NID, "folio contains wrong NID; expected `%s`, got `%s`", noteRes.ID, folio[0].NID)
+			}
+		}
+	}
+}
+
 func (suite *SessionTests) addNote(conn *Conn, sess *Session) Resource {
 	conn.ClientEvent(Event{Name: "res-sync",
 		SID:     sess.sid,
