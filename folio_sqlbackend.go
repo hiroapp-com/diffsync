@@ -86,6 +86,7 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, store *Store, ctx 
 		// TBD: should we just ignore the inserts if the constraints fail? (i.e. noteref already exists for user)
 		backend.db.Exec("INSERT INTO noterefs (uid, nid, tmp_nid, status, role) VALUES(?, ?, ?, ?, ?)", uid, note.NID, note.tmpNID, note.Status, role)
 		store.NotifyReset("note", note.NID, ctx)
+		store.NotifyTaint("note", note.NID, ctx)
 	}
 	return nil
 }
