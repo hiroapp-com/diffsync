@@ -27,6 +27,7 @@ type SessionBackend interface {
 	Save(*Session) error
 	Delete(string) error
 	Release(*Session)
+	GetSubscriptions(Resource) ([]string, error)
 }
 
 type Auther interface {
@@ -226,6 +227,7 @@ func (sess *Session) flush(store *Store) {
 		// TODO(flo) check if any tags timed out (due to missing client) and taint them again
 		return
 	}
+	log.Printf("session[%s]: flush requested\n", sess.sid)
 	for _, res := range sess.tainted {
 		shadow, ok := sess.getShadow(res)
 		if !ok {
