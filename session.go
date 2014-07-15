@@ -83,6 +83,8 @@ func (sess *Session) Handle(event Event) {
 	switch event.Name {
 	case "session-create":
 		sess.handle_session_create(event)
+	case "token-consume":
+		sess.handle_token_consume(event)
 	case "res-taint":
 		sess.handle_taint(event)
 	case "res-reset":
@@ -136,9 +138,6 @@ func (sess *Session) handle_sync(event Event) {
 			log.Println("ERRR sync:", err) //todo error handling! do we need 'changed' here?
 		}
 	}
-	//TODO(flo) do not send taint events here, but some layers down
-	event.store.NotifyTaint(shadow.res.ID, sess.sid, event.ctx)
-
 	tag, ok := sess.getTag(shadow.res.StringRef())
 	if ok {
 		// we will remove the tag in our taglib anyways.
@@ -205,6 +204,11 @@ func (sess *Session) handle_reset(event Event) {
 
 func (sess *Session) handle_session_create(event Event) {
 	event.Session = sess
+	sess.push_client(event)
+}
+
+func (sess *Session) handle_token_consume(event Event) {
+	// just echo back, Conn() handled everything for us
 	sess.push_client(event)
 }
 

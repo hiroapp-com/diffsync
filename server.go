@@ -36,6 +36,15 @@ func (srv *Server) anonToken() (string, error) {
 	return token, nil
 }
 
+func (srv *Server) loginToken(uid string) (string, error) {
+	token, hashed := generateToken()
+	_, err := srv.db.Exec("INSERT INTO tokens (token, kind, uid) VALUES (?, 'login', ?)", hashed, uid)
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
 func (srv *Server) NewConn() *Conn {
 	return NewConn(srv.SessionHub.Inbox(), srv.TokenConsumer, NewJsonAdapter(), srv.Store)
 }
