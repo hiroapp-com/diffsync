@@ -446,9 +446,14 @@ func sid_generate() string {
 	uuid[4] = 0x40 // v4
 	return hex.EncodeToString(uuid)
 }
+
 func generateTag() string {
-	const src = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-	var bytes = make([]byte, 5)
+	return randomString(5)
+}
+
+func randomString(l int) string {
+	const src = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	var bytes = make([]byte, l)
 	rand.Read(bytes)
 	for i, b := range bytes {
 		bytes[i] = src[b%byte(len(src))]

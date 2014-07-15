@@ -177,5 +177,5 @@ func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx context) (e
 }
 
 func generateNID() string {
-	return sid_generate()[:10]
+	return randomString(10)
 }

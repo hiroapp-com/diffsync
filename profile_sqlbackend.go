@@ -125,5 +125,5 @@ func getOrCreateUser(userRef User, db *sql.DB) (user User, created bool, err err
 }
 
 func generateUID() string {
-	return sid_generate()[:8]
+	return randomString(8)
 }

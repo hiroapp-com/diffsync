@@ -11,7 +11,7 @@ type MemBackend struct {
 }
 
 func (mem *MemBackend) GenID() string {
-	return sid_generate()
+	return randomString(9)
 }
 
 func NewMemBackend(nilValueFunc func() ResourceValue) *MemBackend {
