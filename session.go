@@ -42,9 +42,9 @@ type InvalidSessionId struct {
 }
 
 type Tag struct {
-	ref      string
-	val      string
-	lastSent time.Time
+	Ref      string    `json:"ref"`
+	Val      string    `json:"val"`
+	LastSent time.Time `json:"last_sent"`
 }
 
 type Session struct {
@@ -149,7 +149,7 @@ func (sess *Session) handle_sync(event Event) {
 		sess.removeTag(shadow.res.StringRef())
 	}
 	// check event-tag
-	if tag.val == event.Tag {
+	if tag.Val == event.Tag {
 		//received a response to a server-side-sync(sss) cycle
 		// we're all done!
 		// note this relies on the fact that during sync-incoming, appropriate
@@ -237,13 +237,13 @@ func (sess *Session) flush(store *Store) {
 		}
 		tag, ok := sess.getTag(res.StringRef())
 		if ok {
-			if time.Now().Sub(tag.lastSent) < 10*time.Second {
+			if time.Now().Sub(tag.LastSent) < 10*time.Second {
 				// maybe still inflight, let's wait a little more until we retry
 				continue
 			}
 			// stale tag, resend previous tag, keep resource in tainted state, will be flushed later
 			// if this time it get's through, the tag will be removed and the changes still sent
-			event := Event{Name: "res-sync", Tag: tag.val, SID: sess.sid, Res: res.Ref(), Changes: shadow.pending}
+			event := Event{Name: "res-sync", Tag: tag.Val, SID: sess.sid, Res: res.Ref(), Changes: shadow.pending}
 			if !sess.push_client(event) {
 				// client went offline, stop for now
 				log.Printf("session[%s]: client went offline during flush. aborting", sess.sid)
@@ -253,17 +253,17 @@ func (sess *Session) flush(store *Store) {
 			continue
 		}
 		log.Printf("session[%s]: flushin' tainted resource: %s\n", sess.sid, res)
-		if modified := shadow.UpdatePending(store); !modified {
-			return
+		modified := shadow.UpdatePending(store)
+		if modified {
+			newTag := sess.createTag(res.StringRef())
+			event := Event{Name: "res-sync", Tag: newTag, SID: sess.sid, Res: res.Ref(), Changes: shadow.pending}
+			if !sess.push_client(event) {
+				// client went offline, stop for now
+				log.Printf("session[%s]: client went offline during flush. aborting", sess.sid)
+				return
+			}
+			sess.tagSent(res.StringRef())
 		}
-		newTag := sess.createTag(res.StringRef())
-		event := Event{Name: "res-sync", Tag: newTag, SID: sess.sid, Res: res.Ref(), Changes: shadow.pending}
-		if !sess.push_client(event) {
-			// client went offline, stop for now
-			log.Printf("session[%s]: client went offline during flush. aborting", sess.sid)
-			return
-		}
-		sess.tagSent(res.StringRef())
 		sess.tickoffTainted(res.Ref())
 		sess.flushes[res.StringRef()] = time.Now()
 	}
@@ -278,6 +278,7 @@ func (sess *Session) handle_ehlo(event Event) {
 func (sess *Session) push_client(event Event) bool {
 	select {
 	case sess.client <- event:
+		log.Printf("session[%s]: pushed event to client: %#v", sess.sid, event)
 		return true
 	default:
 	}
@@ -291,7 +292,7 @@ func (sess *Session) push_client(event Event) bool {
 
 func (sess *Session) getTag(ref string) (Tag, bool) {
 	for i := range sess.tags {
-		if sess.tags[i].ref == ref {
+		if sess.tags[i].Ref == ref {
 			return sess.tags[i], true
 		}
 	}
@@ -300,7 +301,7 @@ func (sess *Session) getTag(ref string) (Tag, bool) {
 
 func (sess *Session) removeTag(ref string) {
 	for i := range sess.tags {
-		if sess.tags[i].ref == ref {
+		if sess.tags[i].Ref == ref {
 			sess.tags = append(sess.tags[:i], sess.tags[i+1:]...)
 			return
 		}
@@ -310,14 +311,14 @@ func (sess *Session) removeTag(ref string) {
 func (sess *Session) createTag(ref string) string {
 	sess.removeTag(ref)
 	tag := generateTag()
-	sess.tags = append(sess.tags, Tag{ref: ref, val: tag, lastSent: time.Time{}})
+	sess.tags = append(sess.tags, Tag{Ref: ref, Val: tag, LastSent: time.Time{}})
 	return tag
 }
 
 func (sess *Session) tagSent(ref string) {
 	for i := range sess.tags {
-		if sess.tags[i].ref == ref {
-			sess.tags[i].lastSent = time.Now()
+		if sess.tags[i].Ref == ref {
+			sess.tags[i].LastSent = time.Now()
 		}
 	}
 }
