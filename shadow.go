@@ -34,7 +34,9 @@ func (shadow *Shadow) Rollback() {
 func (shadow *Shadow) UpdatePending(store *Store) bool {
 	res := shadow.res.Ref()
 	log.Printf("shadow[%s:%p]: calculating new delta and upate pending-queue\n", res.StringRef(), &res)
-	_ = store.Load(&res)
+	if err := store.Load(&res); err != nil {
+		log.Printf("shadow[%s:%p]: error - could not load master-version for update. err: %s", res.StringRef(), &res, err)
+	}
 	log.Printf("shadow[%s:%p]: current mastertext: `%s`\n", res.StringRef(), &res, res.Value)
 	log.Printf("shadow[%s:%p]: current shadowtext: `%s`\n", shadow.res.StringRef(), &shadow.res, shadow.res.Value)
 	delta := shadow.res.Value.GetDelta(res.Value)
