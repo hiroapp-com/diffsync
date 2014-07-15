@@ -67,26 +67,24 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, store *Store, ctx 
 		// patch.Path empty
 		// patch.Value contains new NoteRef value
 		// patch.OldValue contains old Status for CAS
-		note := patch.Value.(NoteRef)
+		noteref := patch.Value.(NoteRef)
 		// TODO(flo) check if note with ID already exists. for no just checking against tmp ids
 		role := "active"
-		if len(note.NID) < 5 {
+		if len(noteref.NID) < 5 {
 			// save blank note with new NID
 			newnote, err := store.NewResource("note", ctx)
 			if err != nil {
 				return err
 			}
-			note.tmpNID = note.NID
-			note.NID = newnote.ID
+			noteref.tmpNID = noteref.NID
+			noteref.NID = newnote.ID
 			role = "owner"
 		}
 		// TODO(flo) check permissin?
 		// fire and forgeeeeet
-		// (uid, nid) needs to be unique key.
-		// TBD: should we just ignore the inserts if the constraints fail? (i.e. noteref already exists for user)
-		backend.db.Exec("INSERT INTO noterefs (uid, nid, tmp_nid, status, role) VALUES(?, ?, ?, ?, ?)", uid, note.NID, note.tmpNID, note.Status, role)
-		store.NotifyReset("note", note.NID, ctx)
-		store.NotifyTaint("note", note.NID, ctx)
+		backend.db.Exec("UPDATE noterefs SET tmp_nid = ?, status = ?, role = ? WHERE uid = ? and nid = ?", noteref.tmpNID, noteref.Status, role, uid, noteref.NID)
+		store.NotifyReset("note", noteref.NID, ctx)
+		store.NotifyTaint("note", noteref.NID, ctx)
 	}
 	return nil
 }
