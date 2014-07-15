@@ -21,11 +21,17 @@ func NewProfileSQLBackend(db *sql.DB) ProfileSQLBackend {
 func (backend ProfileSQLBackend) Get(uid string) (ResourceValue, error) {
 	profile := NewProfile()
 	u := User{}
-	if err := backend.db.QueryRow("SELECT uid, name, tier, email, phone, plan, signup_at FROM users WHERE uid = ?", uid).Scan(&u.UID, &u.Name, &u.Tier, &u.Email, &u.Phone, &u.Plan, &u.SignupAt); err != nil {
+	if err := backend.db.QueryRow("SELECT uid, name, tier, email, phone, email_status, phone_status, plan, signup_at FROM users WHERE uid = ?", uid).Scan(&u.UID, &u.Name, &u.Tier, &u.Email, &u.Phone, &u.EmailStatus, &u.PhoneStatus, &u.Plan, &u.SignupAt); err != nil {
 		return nil, err
 	}
 	profile.User = u
-	rows, err := backend.db.Query("SELECT uid, tmp_uid, name, signup_at FROM users WHERE uid IN (select contact_uid from contacts where uid = ?) ", uid)
+	rows, err := backend.db.Query(`SELECT uid, 
+										  tmp_uid, 
+										  name, 
+										  signup_at 
+									FROM users 
+									WHERE uid IN (select contact_uid from contacts where uid = ?) 
+										AND tier <> 0`, uid)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +76,36 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, store *Store, ct
 		if err != nil {
 			return err
 		}
+	case "set-email":
+		// patch.Path must be "user/"
+		// patch.Value contains the new Email
+		// patch.OldValue contains the old Email for CAS
+		if patch.Path != "user/" || uid != ctx.uid {
+			return nil
+		}
+		res, err := backend.db.Exec("UPDATE users SET email = ?, email_status = 'unverified' WHERE uid = ? AND email = ?", patch.Value.(string), uid, patch.OldValue.(string))
+		if err != nil {
+			return err
+		}
+		if affected, _ := res.RowsAffected(); affected > 0 {
+			store.SendVerifyEmailToken(uid, patch.Value.(string))
+		}
+
+	case "set-tier":
+		// patch.Path must be "user/"
+		// patch.Value contains the new Tier
+		// patch.OldValue contains the old Tier for CAS
+		if ctx.uid != "sys" {
+			log.Printf("non-`sys` context tried to set a user's tier. target-uid: %s context uid: %s", uid, ctx.uid)
+			return nil
+		}
+		if patch.Path != "user/" {
+			return nil
+		}
+		_, err := backend.db.Exec("UPDATE users SET tier = ? WHERE uid = ? AND tier = ?", patch.Value.(int64), uid, patch.OldValue.(int64))
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -108,7 +144,7 @@ func getOrCreateUser(userRef User, db *sql.DB) (user User, created bool, err err
 		user = userRef
 		user.tmpUID = user.UID
 		user.UID = generateUID()
-		_, err = txn.Exec("INSERT INTO users (uid, tmp_uid, name, email, phone, created_for_sid) values (?, ?, ?, ?, ?, ?)", user.UID, user.tmpUID, user.Name, user.Email, user.Phone, user.createdForSID)
+		_, err = txn.Exec("INSERT INTO users (uid, tmp_uid, tier, name, email, phone, email_status, phone_status, created_for_sid) values (?, ?, ?, ?, ?, ?, ?, ?, ?)", user.UID, user.tmpUID, user.Tier, user.Name, user.Email, user.Phone, user.EmailStatus, user.PhoneStatus, user.createdForSID)
 		if err != nil {
 			txn.Rollback()
 			log.Printf("error while creatting new user: %s\n", err)

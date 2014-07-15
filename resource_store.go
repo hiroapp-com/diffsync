@@ -105,6 +105,27 @@ func (store *Store) NotifyTaint(kind, id string, ctx context) {
 	}
 }
 
+func (store *Store) SendVerifyEmailToken(uid string, email string) {
+	//TODO find better place for this method
+	txn, err := store.userDB.Begin() // TODO(flo) rename userDB > db OR find better place for this
+	if err != nil {
+		// cannot process right now
+		return
+	}
+	token, hashed := generateToken()
+	_, err = txn.Exec("INSERT INTO tokens (token, kind, uid, email) VALUES (?, 'verify', ?, ?)", hashed, uid, email)
+	if err != nil {
+		txn.Rollback()
+		return
+	}
+	select {
+	case store.comm <- CommRequest{uid: uid, kind: "email-verify", data: map[string]string{"token": token}}:
+	default:
+		txn.Rollback()
+		return
+	}
+	txn.Commit()
+}
 func (store *Store) SendInvitation(user User, nid string) {
 	//TODO find better place for this method
 	txn, err := store.userDB.Begin() // TODO(flo) rename userDB > db OR find better place for this

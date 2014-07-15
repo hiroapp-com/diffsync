@@ -19,9 +19,9 @@ type User struct {
 	UID           string     `json:"uid,omitempty"`
 	Name          string     `json:"name,omitempty"`
 	Email         string     `json:"email,omitempty"`
-	EmailStatus   string     `json:"-"`
+	EmailStatus   string     `json:"email_status"`
 	Phone         string     `json:"phone,omitempty"`
-	PhoneStatus   string     `json:"-"`
+	PhoneStatus   string     `json:"email_status"`
 	Plan          string     `json:"plan,omitempty"`
 	Tier          int64      `json:"tier,omitempty"`
 	SignupAt      *time.Time `json:"signup_at"`

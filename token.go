@@ -151,7 +151,7 @@ func (tok *HiroTokens) Consume(token_key, sid string, store *Store) (*Session, e
 	if err != nil {
 		return nil, err
 	}
-	if token.Kind != "share" {
+	if !strings.HasPrefix(token.Kind, "share") {
 		return nil, errors.New("cannot consume non-shareing token")
 	}
 	log.Printf("loading session (%s) from backend", sid)
@@ -222,7 +222,6 @@ func (tok *HiroTokens) verifyID(uid, kind, to_verify string) error {
 	injectKind := func(qry string) string {
 		return strings.Replace(qry, "KIND", kind, -1)
 	}
-
 	res, err := tok.db.Exec(injectKind(`UPDATE users SET KIND_status = 'verified' 
 						WHERE uid = ? 
 						AND KIND = ?

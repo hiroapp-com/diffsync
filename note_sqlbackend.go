@@ -87,6 +87,13 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 		// patch.Value contains User object (maybe without UID)
 		// patch.OldValue empty
 		userRef := patch.Value.(User)
+		if userRef.Email != "" {
+			userRef.EmailStatus = "invited"
+		}
+		if userRef.Phone != "" {
+			userRef.PhoneStatus = "invited"
+		}
+		userRef.Tier = -1
 		user, _, err := getOrCreateUser(userRef, backend.db)
 		if err != nil {
 			return err
@@ -94,6 +101,8 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 		// fire and forgeeeeet
 		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", ctx.uid, user.UID)
 		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", user.UID, ctx.uid)
+		//TODO(flo) add contact for every other user what accesses given note OR calculate contacts
+		//			from contacts and noterefs in profilebackend.get?
 		res, err := backend.db.Exec("INSERT INTO noterefs (nid, uid, role) VALUES(?, ?, 'invited')", nid, user.UID)
 		if err != nil {
 			return fmt.Errorf("could not create note-ref for invitee: nid: %s, uid: %s", nid, user.UID)
@@ -101,9 +110,12 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			store.SendInvitation(user, nid)
 		}
-		store.NotifyReset("note", nid, ctx) // TODO address SID directly
+		// taint profile so its and it's contact's contact lists get updated
 		store.NotifyTaint("profile", ctx.uid, ctx)
-		store.NotifyTaint("profile", user.UID, ctx)
+		// reset so SID gets shadow
+		store.NotifyReset("note", nid, ctx) // TODO address SID directly
+		// taint to all others get the peers update
+		store.NotifyTaint("note", nid, ctx)
 	case "set-cursor":
 		// patch.Path contains UID of peer whose cursor to set
 		// patch.Value contains int64 with new cursor position
@@ -140,6 +152,10 @@ func (backend NoteSQLBackend) CreateEmpty(ctx context) (string, error) {
 	// create token
 	if _, err := backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES (?, 'share-url', '', ?)", hashed, nid); err != nil {
 		return "", nil
+	}
+	// already create a noteref (i.e. add to user's folio) if uid provided in context
+	if ctx.uid != "" {
+		backend.db.Exec("INSERT INTO noterefs (uid, nid, status, role) VALUES (?, ?, 'active', 'owner')", ctx.uid, nid)
 	}
 	return nid, nil
 }
