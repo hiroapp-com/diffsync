@@ -11,7 +11,7 @@ type Subscription struct {
 }
 
 type SubscriberChecker interface {
-	GetSubscriptions(Resource) ([]string, error)
+	GetSubscriptions(Resource) ([][2]string, error)
 }
 
 type NotifyListener chan Event
@@ -38,7 +38,12 @@ func (notify NotifyListener) Run(subscriptions SubscriberChecker, sesshub chan<-
 		}
 		for i := range subs {
 			log.Printf("notify: found subscribed session (%s), forwarding event to inbox.\n", subs[i])
-			sesshub <- Event{Name: event.Name, SID: subs[i], Res: event.Res, store: event.store, ctx: event.ctx}
+			res := event.Res
+			switch res.Kind {
+			case "folio", "profile":
+				res.ID = subs[i][1]
+			}
+			sesshub <- Event{Name: event.Name, SID: subs[i][0], Res: res, store: event.store, ctx: event.ctx}
 		}
 	}
 	log.Printf("notify (%v) channel closed, shutting down, notify")

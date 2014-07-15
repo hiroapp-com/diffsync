@@ -27,7 +27,7 @@ type SessionBackend interface {
 	Save(*Session) error
 	Delete(string) error
 	Release(*Session)
-	GetSubscriptions(Resource) ([]string, error)
+	GetSubscriptions(Resource) ([][2]string, error)
 }
 
 type Auther interface {

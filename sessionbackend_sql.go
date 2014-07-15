@@ -80,41 +80,41 @@ func (store *SQLSessions) allocateSession() *Session {
 	return sess
 }
 
-func (store *SQLSessions) subsByQuery(qry string, args ...interface{}) ([]string, error) {
+func (store *SQLSessions) subsByQuery(qry string, args ...interface{}) ([][2]string, error) {
 	rows, err := store.db.Query(qry, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	subs := []string{}
+	subs := [][2]string{}
 	for rows.Next() {
-		var sid string
-		err := rows.Scan(&sid)
+		var sid, uid string
+		err := rows.Scan(&sid, &uid)
 		if err != nil {
 			return nil, err
 		}
-		subs = append(subs, sid)
+		subs = append(subs, [2]string{sid, uid})
 	}
 	return subs, nil
 }
 
-func (store *SQLSessions) GetSubscriptions(res Resource) ([]string, error) {
+func (store *SQLSessions) GetSubscriptions(res Resource) ([][2]string, error) {
 	switch res.Kind {
 	case "note":
-		return store.subsByQuery("SELECT sid FROM sessions WHERE uid in (SELECT uid FROM noterefs WHERE nid = ?)", res.ID)
+		return store.subsByQuery("SELECT sid, uid FROM sessions WHERE uid in (SELECT uid FROM noterefs WHERE nid = ?)", res.ID)
 	case "folio":
-		return store.subsByQuery("SELECT sid FROM sessions WHERE uid = ?", res.ID)
+		return store.subsByQuery("SELECT sid, uid FROM sessions WHERE uid = ?", res.ID)
 	case "profile":
-		subs, err := store.subsByQuery("SELECT sid FROM sessions WHERE uid = ?", res.ID)
+		subs, err := store.subsByQuery("SELECT sid, uid FROM sessions WHERE uid = ?", res.ID)
 		if err != nil {
 			return nil, err
 		}
-		contacts, err := store.subsByQuery("SELECT sid FROM sessions WHERE uid IN (SELECT uid FROM contacts WHERE contact_uid = ?)", res.ID)
+		contacts, err := store.subsByQuery("SELECT sid, uid FROM sessions WHERE uid IN (SELECT uid FROM contacts WHERE contact_uid = ?)", res.ID)
 		if err != nil {
 			return nil, err
 		}
 		subs = append(subs, contacts...)
 		return subs, nil
 	}
-	return []string{}, nil
+	return [][2]string{}, nil
 }
