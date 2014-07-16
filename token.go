@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"time"
@@ -185,9 +186,8 @@ func (tok *HiroTokens) GetUID(sid string) (string, error) {
 }
 
 func (tok *HiroTokens) getToken(plain string) (Token, error) {
-	plainBytes, _ := hex.DecodeString(plain)
 	h := sha512.New()
-	h.Write(plainBytes)
+	io.WriteString(h, plain)
 	hashed := hex.EncodeToString(h.Sum(nil))
 	log.Println("Looking for token (byte: `%v`) with hash %s", tok, hashed)
 	token := Token{}
@@ -300,7 +300,7 @@ func generateToken() (string, string) {
 	uuid[4] = 0x40 // v4
 	plain := hex.EncodeToString(uuid)
 	h := sha512.New()
-	h.Write(uuid)
+	io.WriteString(h, plain)
 	hashed := hex.EncodeToString(h.Sum(nil))
 	return plain, hashed
 }
