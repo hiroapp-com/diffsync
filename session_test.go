@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"testing"
 	"time"
@@ -299,6 +300,73 @@ func (suite *SessionTests) TestVisitorWithVerifyEmailToken() {
 	}
 }
 
+func (suite *SessionTests) TestAnonConsumeURLShare() {
+	sessA, connA := suite.anonSession()
+	// create new note
+	sharedRes := suite.addNote(sessA, connA)
+	if !suite.NotEqual(Resource{}, sharedRes) {
+		suite.T().Fatal("could not add resource")
+	}
+	note := sharedRes.Value.(Note)
+	if suite.NotEmpty(note.SharingToken, "sharingtoken missing in newly created note") {
+		// now use the token to create a new anon-user
+		sessB, connB := suite.anonSession()
+		suite.addNote(sessB, connB)
+		connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: note.SharingToken})
+		// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
+		responses := [3]Event{}
+		for i := 0; i < 3; i++ {
+			responses[i] = suite.awaitResponse(connB.ToClient(), "no response from connection")
+		}
+		var found int
+		for _, resp := range responses {
+			switch resp.Name {
+			case "token-consume":
+				found++
+				continue
+			case "res-sync":
+				if resp.Res.Kind == "note" {
+					found++
+					suite.Equal(sharedRes.ID, resp.Res.ID, "note-id mismatch. expected `%s`, got `%s`", sharedRes.ID, resp.Res.ID)
+					// expecting 3 deltas: set-token & 2*add-peer (sessA and sessB users)
+					suite.Equal(3, len(resp.Changes[0].Delta.(NoteDelta)), "wrong number of deltas for note")
+				} else if resp.Res.Kind == "folio" {
+					found++
+					// because they way the protocoll works, the *first* delta the server
+					// sent to this session was never acked (b.c. it was sent with an ACK).
+					// thus, the server will include the original "set-nid" change along with
+					// the actual new-note change
+					if suite.Equal(2, len(resp.Changes), "wrong number of changes for folio. expected 2, got %v", resp.Changes) {
+						if suite.Equal(1, len(resp.Changes[1].Delta.(FolioDelta)), "wrong number of changes for folio") {
+							delta := resp.Changes[1].Delta.(FolioDelta)
+							suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received, wanted a `add-noteref`, got `%s`", delta[0].Op)
+							suite.Equal(sharedRes.ID, delta[0].Value.(NoteRef).NID, "wrong nid received in folio-delta")
+						}
+					}
+				}
+			default:
+				suite.T().Errorf("Received unexpected event: %v", resp)
+
+			}
+		}
+		suite.Equal(3, found, "not all expected responses received")
+
+		// see if sessA got hold of the new peer
+		peersEvent := suite.awaitResponse(connA.ToClient(), "inviter did not get peers update")
+		suite.Equal("res-sync", peersEvent.Name, "got unexpected event-name from connection: %v", peersEvent.Name)
+		suite.Equal("note", peersEvent.Res.Kind, "expected a note-sync, but Res is `%s`", peersEvent.Res.Kind)
+		suite.Equal(sharedRes.ID, peersEvent.Res.ID, "note-id mismatch")
+		if suite.Equal(1, len(peersEvent.Changes), "wrong number of changes") {
+			// see if we got the peers update from sessB
+			deltas := peersEvent.Changes[0].Delta.(NoteDelta)
+			suite.Equal(1, len(deltas), "wrong number of changes")
+			suite.Equal("add-peer", deltas[0].Op, "wrong delta.Op")
+			suite.Equal(sessB.uid, deltas[0].Value.(Peer).User.UID, "wrong peer UID")
+			suite.Equal("active", deltas[0].Value.(Peer).Role, "wrong peer UID")
+		}
+	}
+
+}
 func (suite *SessionTests) TestAnonConsumeEmailShare() {
 	sessA, connA := suite.anonSession()
 	// create new note
@@ -397,6 +465,196 @@ func (suite *SessionTests) TestAnonConsumeEmailShare() {
 		}
 	}
 
+}
+func (suite *SessionTests) TestAnonConsumePhoneShare() {
+	sessA, connA := suite.anonSession()
+	// create new note
+	sharedRes := suite.addNote(sessA, connA)
+	if !suite.NotEqual(Resource{}, sharedRes) {
+		suite.T().Fatal("could not add resource")
+	}
+	err := suite.srv.Store.Patch(sharedRes, Patch{"invite-user", "", User{Phone: "+100012345"}, nil}, context{uid: sessA.uid, ts: time.Now()})
+	if suite.NoError(err, "could not invite user") {
+		event := suite.awaitResponse(connA.ToClient(), "inviter did not get profile update (add contact) after email-share")
+		suite.Equal("res-sync", event.Name, "got unexpected event-name from connection")
+		suite.Equal("profile", event.Res.Kind, "expected a profile-sync")
+		suite.Equal(sessA.uid, event.Res.ID, "profile-id mismatch")
+		if suite.Equal(1, len(event.Changes), "wrong number of changes") {
+			// ACK the sync
+			event.Changes[0].Clock.SV++
+			event.Changes[0].Delta = ProfileDelta{}
+			connA.ClientEvent(event)
+		}
+		// no await the note update (add-peer)
+		event = suite.awaitResponse(connA.ToClient(), "inviter did not get note update (add peer) after email-share")
+		suite.Equal("res-sync", event.Name, "got unexpected event-name from connection")
+		suite.Equal("note", event.Res.Kind, "expected a note-sync")
+		suite.Equal(sharedRes.ID, event.Res.ID, "note-id mismatch")
+		if suite.Equal(1, len(event.Changes), "wrong number of changes") {
+			if suite.Equal("add-peer", event.Changes[0].Delta.(NoteDelta)[0].Op, "unexpected note-delta") {
+				// ACK the sync
+				event.Changes[0].Clock.SV++
+				event.Changes[0].Delta = NoteDelta{}
+				connA.ClientEvent(event)
+			}
+		}
+
+		var req CommRequest
+		select {
+		case req = <-suite.comm:
+		case <-time.After(5 * time.Second):
+			suite.T().Fatal("comm-request after invite did not arrive in time")
+		}
+		suite.Equal("phone-invite", req.kind, "CommRequest has wrong kind. expected `phone-invite`, but go `%s`", req, req.kind)
+		if suite.NotEmpty(req.data["token"], "Token missing in CommRequest atfer invite") {
+			// now use the token to create a new anon-user
+			sessB, connB := suite.anonSession()
+			suite.addNote(sessB, connB)
+			connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: req.data["token"]})
+			// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
+			responses := [3]Event{}
+			for i := 0; i < 3; i++ {
+				responses[i] = suite.awaitResponse(connB.ToClient(), "no response from connection")
+			}
+			var found int
+			for _, resp := range responses {
+				switch resp.Name {
+				case "token-consume":
+					found++
+					continue
+				case "res-sync":
+					if resp.Res.Kind == "note" {
+						found++
+						suite.Equal(sharedRes.ID, resp.Res.ID, "note-id mismatch. expected `%s`, got `%s`", sharedRes.ID, resp.Res.ID)
+						suite.Equal(4, len(resp.Changes[0].Delta.(NoteDelta)), "wrong number of deltas for note")
+					} else if resp.Res.Kind == "folio" {
+						found++
+						// because they way the protocoll works, the *first* delta the server
+						// sent to this session was never acked (b.c. it was sent with an ACK).
+						// thus, the server will include the original "set-nid" change along with
+						// the actual new-note change
+						if suite.Equal(2, len(resp.Changes), "wrong number of changes for folio. expected 2, got %v", resp.Changes) {
+							if suite.Equal(1, len(resp.Changes[1].Delta.(FolioDelta)), "wrong number of changes for folio") {
+								delta := resp.Changes[1].Delta.(FolioDelta)
+								suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received, wanted a `add-noteref`, got `%s`", delta[0].Op)
+								suite.Equal(sharedRes.ID, delta[0].Value.(NoteRef).NID, "wrong nid received in folio-delta")
+							}
+						}
+					}
+				default:
+					suite.T().Errorf("Received unexpected event: %v", resp)
+
+				}
+			}
+			suite.Equal(3, found, "not all expected responses received")
+
+			// see if sessA got hold of the new peer
+			peersEvent := suite.awaitResponse(connA.ToClient(), "inviter did not get peers update")
+			suite.Equal("res-sync", peersEvent.Name, "got unexpected event-name from connection: %v", peersEvent.Name)
+			suite.Equal("note", peersEvent.Res.Kind, "expected a note-sync, but Res is `%s`", peersEvent.Res.Kind)
+			suite.Equal(sharedRes.ID, peersEvent.Res.ID, "note-id mismatch")
+			if suite.Equal(1, len(peersEvent.Changes), "wrong number of changes") {
+				// see if we got the peers update from sessB
+				deltas := peersEvent.Changes[0].Delta.(NoteDelta)
+				suite.Equal(1, len(deltas), "wrong number of changes")
+				suite.Equal("add-peer", deltas[0].Op, "wrong delta.Op")
+				suite.Equal(sessB.uid, deltas[0].Value.(Peer).User.UID, "wrong peer UID")
+				suite.Equal("active", deltas[0].Value.(Peer).Role, "wrong peer UID")
+			}
+		}
+	}
+
+}
+
+func (suite *SessionTests) TestAnonLogin() {
+	// first spawn an anon session that creates the shared token
+	user := suite.createUserWith2Notes("test")
+	token, err := suite.srv.loginToken(user.UID)
+	suite.NoError(err, "cannot create login token")
+
+	sessA, connA := suite.anonSession()
+	// create new note
+	res := suite.addNote(sessA, connA)
+	if !suite.NotEqual(Resource{}, res) {
+		suite.T().Fatal("could not add resource")
+	}
+
+	connA.ClientEvent(Event{Name: "session-create", Token: token, SID: sessA.sid})
+	resp := suite.awaitResponse(connA.ToClient(), "session-create response did not arrive")
+	// overwrite sessA with new session
+	sessA = resp.Session
+	suite.Equal(user.UID, sessA.uid)
+	suite.Equal(5, len(sessA.shadows), "incorrect number of shadows for new session")
+
+	// check if returned session has user.UID
+	shadow := extractShadow(sessA, "profile")
+	if suite.NotNil(shadow, "returned session did not contain a profile shadow") {
+		profile := shadow.res.Value.(Profile)
+		suite.Equal(user.UID, profile.User.UID, "new session's profile-user has wrong UID")
+		suite.Equal(1, profile.User.Tier, "new session's user is not signed up")
+	}
+	// check if folio contains 3 notes
+	shadow = extractShadow(sessA, "folio")
+	if suite.NotNil(shadow, "returned session did not contain a folio shadow") {
+		folio := shadow.res.Value.(Folio)
+		suite.Equal(3, len(folio), "folio has the wrong number of notes. expected 3, got %s", len(folio))
+	}
+}
+
+func (suite *SessionTests) TestAnonWithVerifyEmailToken() {
+	// first spawn an anon session that creates the shared token
+	user := suite.createUserWith2Notes("test")
+	suite.srv.Store.Patch(Resource{Kind: "profile", ID: user.UID}, Patch{"set-email", "user/", "test@hiroapp.com", ""}, context{uid: user.UID})
+	// check for verification-req
+	var req CommRequest
+	select {
+	case req = <-suite.comm:
+	case <-time.After(5 * time.Second):
+		suite.T().Fatal("comm-request after set-email did not arrive in time")
+	}
+
+	suite.Equal("email-verify", req.kind, "CommRequest has wrong kind. expected `email-verify`, but got `%s`", req, req.kind)
+	if suite.NotEmpty(req.data["token"], "Token missing in CommRequest atfer invite") {
+		// now use the token to create a new anon-user
+		sessA, connA := suite.anonSession()
+		// create new note
+		res := suite.addNote(sessA, connA)
+		if !suite.NotEqual(Resource{}, res) {
+			suite.T().Fatal("could not add resource")
+		}
+		connA.ClientEvent(Event{SID: sessA.sid, Name: "session-create", Token: req.data["token"]})
+		resp := suite.awaitResponse(connA.ToClient(), "session-create response (of invitee) did not arrive")
+		// overwrite old (anon)session
+		if resp.Session == nil {
+			suite.T().Fatal("empty session received")
+		}
+		sessA = resp.Session
+		suite.Equal(user.UID, sessA.uid)
+		for i := range sessA.shadows {
+			log.Println("TEST", *sessA.shadows[i])
+		}
+		suite.Equal(5, len(sessA.shadows), "verify user should have 5 shadows (profile, folio, 3*note)")
+
+		// check if returned session matches user.UID
+		shadow := extractShadow(sessA, "profile")
+		if suite.NotNil(shadow, "returned session did not contain a profile shadow") {
+			profile := shadow.res.Value.(Profile)
+			suite.Equal(user.UID, profile.User.UID, "new session's profile-user has wrong UID. expected `%s`, got `%s`", user.UID, profile.User.UID)
+			suite.Equal(1, profile.User.Tier, "new session's user is not signed up")
+
+			// check if the email is verified
+			err := suite.srv.Store.Load(&shadow.res)
+			suite.NoError(err, "cannot load profile-data from store")
+			suite.Equal("verified", shadow.res.Value.(Profile).User.EmailStatus, "emailstatus is not `verified`, but `%s`", profile.User.EmailStatus)
+		}
+
+		shadow = extractShadow(sessA, "folio")
+		if suite.NotNil(shadow, "returned session did not contain a folio shadow") {
+			folio := shadow.res.Value.(Folio)
+			suite.Equal(3, len(folio), "folio has the wrong number of notes. expected 3, got %s", len(folio))
+		}
+
+	}
 }
 
 func (suite *SessionTests) addNote(sess *Session, conn *Conn) Resource {
