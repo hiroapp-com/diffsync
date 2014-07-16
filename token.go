@@ -76,7 +76,7 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 		if changed, err := tok.addNoteRef(uid, token.NID); err != nil {
 			return nil, err
 		} else if changed {
-			store.NotifyTaint("note", token.NID, context{session.sid, session.uid, time.Now()})
+			store.NotifyTaint("note", token.NID, context{"", uid, time.Now()})
 		}
 	}
 	// merge old session's data
@@ -98,7 +98,6 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 			// but proceed normally
 		case nil:
 		}
-		// check if old session was
 		sessProfile := Resource{Kind: "profile", ID: oldSession.uid}
 		if err = store.Load(&sessProfile); err != nil {
 			return nil, err
@@ -108,7 +107,7 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 			for _, shadow := range oldSession.shadows {
 				// only extract notes
 				if shadow.res.Kind == "note" {
-					if changed, err := tok.addNoteRef(uid, shadow.res.ID); err != nil {
+					if changed, err := tok.stealNoteRef(oldSession.uid, uid, shadow.res.ID); err != nil {
 						return nil, err
 					} else if changed {
 						store.NotifyTaint("note", shadow.res.ID, context{session.sid, session.uid, time.Now()})
@@ -219,6 +218,18 @@ func (tok *HiroTokens) addNoteRef(uid, nid string) (changed bool, err error) {
 	// we send an appropriate add-noteref patch down the wire to the folio-store and let the
 	// machinery do the rest
 	res, err := tok.db.Exec("INSERT INTO noterefs (uid, nid, status, role) VALUES (?, ?, 'active', 'active')", uid, nid)
+	if err != nil {
+		return false, err
+	}
+	numChanges, _ := res.RowsAffected()
+	return (numChanges > 0), nil
+}
+
+func (tok *HiroTokens) stealNoteRef(from_uid, to_uid, nid string) (changed bool, err error) {
+	// TODO mayb we can refactor this part to instead of directly modifying the DB
+	// we send an appropriate add-noteref patch down the wire to the folio-store and let the
+	// machinery do the rest
+	res, err := tok.db.Exec("UPDATE noterefs SET uid = ? WHERE nid = ? AND uid = ?", to_uid, nid, from_uid)
 	if err != nil {
 		return false, err
 	}
