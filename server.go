@@ -1,6 +1,9 @@
 package diffsync
 
-import "database/sql"
+import (
+	"database/sql"
+	"errors"
+)
 
 type Server struct {
 	db *sql.DB
@@ -27,6 +30,13 @@ func (srv *Server) Run() {
 
 }
 
+func (srv *Server) Token(kind string) (string, error) {
+	switch kind {
+	case "anon":
+		return srv.anonToken()
+	}
+	return "", errors.New("unknown tokenkind")
+}
 func (srv *Server) anonToken() (string, error) {
 	token, hashed := generateToken()
 	_, err := srv.db.Exec("INSERT INTO tokens (token, kind) VALUES (?, 'anon')", hashed)
