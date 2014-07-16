@@ -47,7 +47,7 @@ func (mem *MemSessions) Get(sid string) (*Session, error) {
 	session, ok = mem.db[sid]
 	if !ok {
 		mem.Release(session)
-		return nil, InvalidSessionId{sid, SESSION_NOTEXIST}
+		return nil, SessionIDInvalidErr{sid}
 	}
 	return session, nil
 }

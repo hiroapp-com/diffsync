@@ -1,7 +1,9 @@
 package diffsync
 
 import (
+	"fmt"
 	"log"
+	"time"
 )
 
 type SessionHub struct {
@@ -9,6 +11,14 @@ type SessionHub struct {
 	runner_done chan string
 	active      map[string]chan<- Event
 	backend     SessionBackend
+}
+
+type ResponseTimeoutErr struct {
+	sid string
+}
+
+func (err ResponseTimeoutErr) Error() string {
+	return fmt.Sprintf("response to sessions timed out. sid: `%s`", err.sid)
 }
 
 func NewSessionHub(backend SessionBackend) *SessionHub {
@@ -70,6 +80,27 @@ func (hub *SessionHub) route(sid string, event Event) error {
 	// TODO(flo) handle panic from chan send in case the inbox shut down in the meanwhile!
 	inbox <- event
 	return nil
+}
+
+func (hub *SessionHub) Snapshot(sid string) (*Session, error) {
+	//TODO(flo) in its inbox-loop, sessionhub should intervene if there is
+	// no active session-runner. in this case, it should not
+	// spawn one up, but instead just load the data and return it
+	sessResponse := make(chan Event, 1)
+	hub.Inbox() <- Event{Name: "snapshot", SID: sid, client: sessResponse}
+	select {
+	case event := <-sessResponse:
+		//response!
+		if event.Session == nil {
+			return nil, SessionIDInvalidErr{sid}
+		}
+		return event.Session, nil
+	case <-time.After(3 * time.Second):
+		// request timed out. we'll ignore the old session alltogether
+		// TBD should we fail hard here, so old anon session data never gets lost (because client will retry)?
+		log.Printf("token: could not fetch session data for `%s`. request to hub timed out. ignoring old sessiondata and continue. ", sid)
+		return nil, ResponseTimeoutErr{sid}
+	}
 }
 
 func (hub *SessionHub) cleanup_runner(sid string) {

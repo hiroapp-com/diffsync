@@ -35,11 +35,12 @@ type TokenDoesNotexistError string
 
 type HiroTokens struct {
 	db       *sql.DB
+	hub      *SessionHub
 	sessions SessionBackend
 }
 
-func NewHiroTokens(backend SessionBackend, db *sql.DB) *HiroTokens {
-	return &HiroTokens{db, backend}
+func NewHiroTokens(backend SessionBackend, hub *SessionHub, db *sql.DB) *HiroTokens {
+	return &HiroTokens{db, hub, backend}
 }
 
 func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*Session, error) {
@@ -80,25 +81,37 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 	}
 	// merge old session's data
 	if oldSID != "" {
-		oldSession, err := tok.sessions.Get(oldSID)
-		if err != nil {
-			log.Printf("token: provided invalid session-id (%s) with create-session request. ignoreing old session's data", oldSID)
-		} else {
-			// check if old session was
-			sessProfile := Resource{Kind: "profile", ID: oldSession.uid}
-			if err = store.Load(&sessProfile); err != nil {
-				return nil, err
-			}
-			if sessProfile.Value.(Profile).User.Tier == 0 {
-				// only merge data from anon sessions
-				for _, shadow := range oldSession.shadows {
-					// only extract notes
-					if shadow.res.Kind == "note" {
-						if changed, err := tok.addNoteRef(uid, shadow.res.ID); err != nil {
-							return nil, err
-						} else if changed {
-							store.NotifyTaint("note", shadow.res.ID, context{session.sid, session.uid, time.Now()})
-						}
+		oldSession, err := tok.hub.Snapshot(oldSID)
+		switch err := err.(type) {
+		default:
+			return nil, err
+		case ResponseTimeoutErr:
+			// we couldn't load the sessin due to
+			// slow/unresponsive session. if we ignore this,
+			// old session data might get lost.
+			// instead, fail hard and let the client retry later
+			log.Printf("token: FATAL backend timed out during snapshot request. sid: `%s`", oldSID)
+			return nil, err
+		case SessionIDInvalidErr:
+			// provided SID is (for some reason) considered invalid
+			// we will simply ignore the sid and not import any data,
+			// but proceed normally
+		case nil:
+		}
+		// check if old session was
+		sessProfile := Resource{Kind: "profile", ID: oldSession.uid}
+		if err = store.Load(&sessProfile); err != nil {
+			return nil, err
+		}
+		if sessProfile.Value.(Profile).User.Tier == 0 {
+			// only merge data from anon sessions
+			for _, shadow := range oldSession.shadows {
+				// only extract notes
+				if shadow.res.Kind == "note" {
+					if changed, err := tok.addNoteRef(uid, shadow.res.ID); err != nil {
+						return nil, err
+					} else if changed {
+						store.NotifyTaint("note", shadow.res.ID, context{session.sid, session.uid, time.Now()})
 					}
 				}
 			}
@@ -155,8 +168,8 @@ func (tok *HiroTokens) Consume(token_key, sid string, store *Store) (*Session, e
 	if !strings.HasPrefix(token.Kind, "share") {
 		return nil, errors.New("cannot consume non-shareing token")
 	}
-	log.Printf("loading session (%s) from backend", sid)
-	session, err := tok.sessions.Get(sid)
+	log.Printf("loading session (%s) from hub", sid)
+	session, err := tok.hub.Snapshot(sid)
 	if err != nil {
 		// todo check if session has expired or anyhing
 		// maybe we want to proceed normaly with token

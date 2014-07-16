@@ -36,9 +36,8 @@ type Auther interface {
 
 type ResourceRegistry map[string]map[string]bool
 
-type InvalidSessionId struct {
-	sid    string
-	reason int
+type SessionIDInvalidErr struct {
+	sid string
 }
 
 type Tag struct {
@@ -62,6 +61,15 @@ func (session *Session) String() string {
 	return string(s)
 }
 
+func (session *Session) Snapshot() *Session {
+	snap := *session
+	for i := range session.shadows {
+		cpy := *session.shadows[i]
+		snap.shadows[i] = &cpy
+	}
+	return &snap
+}
+
 func NewSession(sid, uid string) *Session {
 	return &Session{
 		sid:     sid,
@@ -76,7 +84,7 @@ func NewSession(sid, uid string) *Session {
 
 func (sess *Session) Handle(event Event) {
 	log.Printf("session[%s]: handling %s event\n", sess.sid, event.Name)
-	if event.client != nil {
+	if event.Name != "snapshot" && event.client != nil {
 		log.Printf("session[%s]: setting upstream client chan\n", sess.sid)
 		sess.client = event.client
 	}
@@ -95,6 +103,8 @@ func (sess *Session) Handle(event Event) {
 		sess.handle_ehlo(event)
 	case "client-gone":
 		sess.handle_gone(event)
+	case "snapshot":
+		sess.handle_snapshot(event)
 	default:
 		sess.handle_notimplemented(event)
 	}
@@ -210,6 +220,15 @@ func (sess *Session) handle_session_create(event Event) {
 func (sess *Session) handle_token_consume(event Event) {
 	// just echo back, Conn() handled everything for us
 	sess.push_client(event)
+}
+
+func (sess *Session) handle_snapshot(event Event) {
+	event.Session = sess.Snapshot()
+	select {
+	case event.client <- event:
+	default:
+		log.Printf("session[%s]: snapshot requested but client gone before response", sess.sid)
+	}
 }
 
 func (sess *Session) handle_gone(event Event) {
@@ -436,7 +455,7 @@ func (session *Session) UnmarshalJSON(from []byte) error {
 	return nil
 }
 
-func (err InvalidSessionId) Error() string {
+func (err SessionIDInvalidErr) Error() string {
 	return fmt.Sprintf("invalid session-id: %s", err.sid)
 }
 

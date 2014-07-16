@@ -23,7 +23,7 @@ func (store *SQLSessions) Get(sid string) (*Session, error) {
 	err := store.db.QueryRow("SELECT data FROM sessions where sid = ?", sid).Scan(session)
 	if err == sql.ErrNoRows {
 		store.Release(session)
-		return nil, InvalidSessionId{sid, SESSION_NOTEXIST}
+		return nil, SessionIDInvalidErr{sid}
 	} else if err != nil {
 		store.Release(session)
 		return nil, err

@@ -20,7 +20,7 @@ func NewServer(db *sql.DB, comm chan<- CommRequest) (*Server, error) {
 	srv.Store = NewStore(db, srv.NotifyListener, comm)
 	srv.SessionBackend = NewSQLSessions(db)
 	srv.SessionHub = NewSessionHub(srv.SessionBackend)
-	srv.TokenConsumer = NewHiroTokens(srv.SessionBackend, db)
+	srv.TokenConsumer = NewHiroTokens(srv.SessionBackend, srv.SessionHub, db)
 	return srv, nil
 }
 
