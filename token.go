@@ -165,7 +165,7 @@ func (tok *HiroTokens) Consume(token_key, sid string, store *Store) (*Session, e
 		return nil, err
 	}
 	if !strings.HasPrefix(token.Kind, "share") {
-		return nil, errors.New("cannot consume non-shareing token")
+		return nil, errors.New("cannot consume non-shareing token" + token.Kind)
 	}
 	log.Printf("loading session (%s) from hub", sid)
 	session, err := tok.hub.Snapshot(sid)
