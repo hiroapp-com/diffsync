@@ -367,203 +367,185 @@ func (suite *SessionTests) TestAnonConsumeURLShare() {
 	}
 
 }
+
+func (suite *SessionTests) withShareToken(kind string, sess *Session, conn *Conn, fn func(string, Resource)) {
+	sharedRes := suite.addNote(sess, conn)
+	if !suite.NotEqual(Resource{}, sharedRes) {
+		suite.T().Fatal("could not add resource")
+	}
+	var invitee User
+	var expectedCommunication string
+	switch kind {
+	case "url":
+		note := sharedRes.Value.(Note)
+		if suite.NotEmpty(note.SharingToken, "sharingtoken missing in newly created note") {
+			fn(note.SharingToken, sharedRes)
+		}
+		return
+	case "email":
+		invitee = User{Email: "test@hiroapp.com"}
+		expectedCommunication = "email-invite"
+	case "phone":
+		invitee = User{Phone: "+100012345"}
+		expectedCommunication = "phone-invite"
+	}
+	err := suite.srv.Store.Patch(sharedRes, Patch{"invite-user", "", invitee, nil}, context{uid: sess.uid, ts: time.Now()})
+	if suite.NoError(err, "could not invite user") {
+		event := suite.awaitResponse(conn.ToClient(), "inviter did not get profile update (add contact) after share")
+		suite.Equal("res-sync", event.Name, "got unexpected event-name from connection")
+		suite.Equal("profile", event.Res.Kind, "expected a profile-sync")
+		suite.Equal(sess.uid, event.Res.ID, "profile-id mismatch")
+		if suite.Equal(1, len(event.Changes), "wrong number of changes") {
+			// ACK the sync
+			event.Changes[0].Clock.SV++
+			event.Changes[0].Delta = ProfileDelta{}
+			conn.ClientEvent(event)
+		}
+		// no await the note update (add-peer)
+		event = suite.awaitResponse(conn.ToClient(), "inviter did not get note update (add peer) after share")
+		suite.Equal("res-sync", event.Name, "got unexpected event-name from connection")
+		suite.Equal("note", event.Res.Kind, "expected a note-sync")
+		suite.Equal(sharedRes.ID, event.Res.ID, "note-id mismatch")
+		if suite.Equal(1, len(event.Changes), "wrong number of changes") {
+			if suite.Equal("add-peer", event.Changes[0].Delta.(NoteDelta)[0].Op, "unexpected note-delta") {
+				// ACK the sync
+				event.Changes[0].Clock.SV++
+				event.Changes[0].Delta = NoteDelta{}
+				conn.ClientEvent(event)
+			}
+		}
+
+		var req CommRequest
+		select {
+		case req = <-suite.comm:
+		case <-time.After(5 * time.Second):
+			suite.T().Fatal("comm-request after invite did not arrive in time")
+		}
+		suite.Equal(expectedCommunication, req.kind, "CommRequest has wrong kind")
+		if suite.NotEmpty(req.data["token"], "Token missing in CommRequest atfer invite") {
+			fn(req.data["token"], sharedRes)
+		}
+	}
+}
+
 func (suite *SessionTests) TestAnonConsumeEmailShare() {
 	sessA, connA := suite.anonSession()
 	// create new note
-	sharedRes := suite.addNote(sessA, connA)
-	if !suite.NotEqual(Resource{}, sharedRes) {
-		suite.T().Fatal("could not add resource")
-	}
-	err := suite.srv.Store.Patch(sharedRes, Patch{"invite-user", "", User{Email: "test@hiroapp.com"}, nil}, context{uid: sessA.uid, ts: time.Now()})
-	if suite.NoError(err, "could not invite user") {
-		event := suite.awaitResponse(connA.ToClient(), "inviter did not get profile update (add contact) after email-share")
-		suite.Equal("res-sync", event.Name, "got unexpected event-name from connection")
-		suite.Equal("profile", event.Res.Kind, "expected a profile-sync")
-		suite.Equal(sessA.uid, event.Res.ID, "profile-id mismatch")
-		if suite.Equal(1, len(event.Changes), "wrong number of changes") {
-			// ACK the sync
-			event.Changes[0].Clock.SV++
-			event.Changes[0].Delta = ProfileDelta{}
-			connA.ClientEvent(event)
+	suite.withShareToken("email", sessA, connA, func(token string, shared Resource) {
+		// now use the token to create a new anon-user
+		sessB, connB := suite.anonSession()
+		suite.addNote(sessB, connB)
+		connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: token})
+		// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
+		responses := [3]Event{}
+		for i := 0; i < 3; i++ {
+			responses[i] = suite.awaitResponse(connB.ToClient(), "no response from connection")
 		}
-		// no await the note update (add-peer)
-		event = suite.awaitResponse(connA.ToClient(), "inviter did not get note update (add peer) after email-share")
-		suite.Equal("res-sync", event.Name, "got unexpected event-name from connection")
-		suite.Equal("note", event.Res.Kind, "expected a note-sync")
-		suite.Equal(sharedRes.ID, event.Res.ID, "note-id mismatch")
-		if suite.Equal(1, len(event.Changes), "wrong number of changes") {
-			if suite.Equal("add-peer", event.Changes[0].Delta.(NoteDelta)[0].Op, "unexpected note-delta") {
-				// ACK the sync
-				event.Changes[0].Clock.SV++
-				event.Changes[0].Delta = NoteDelta{}
-				connA.ClientEvent(event)
-			}
-		}
-
-		var req CommRequest
-		select {
-		case req = <-suite.comm:
-		case <-time.After(5 * time.Second):
-			suite.T().Fatal("comm-request after invite did not arrive in time")
-		}
-		suite.Equal("email-invite", req.kind, "CommRequest has wrong kind. expected `email-invite`, but go `%s`", req, req.kind)
-		if suite.NotEmpty(req.data["token"], "Token missing in CommRequest atfer invite") {
-			// now use the token to create a new anon-user
-			sessB, connB := suite.anonSession()
-			suite.addNote(sessB, connB)
-			connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: req.data["token"]})
-			// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
-			responses := [3]Event{}
-			for i := 0; i < 3; i++ {
-				responses[i] = suite.awaitResponse(connB.ToClient(), "no response from connection")
-			}
-			var found int
-			for _, resp := range responses {
-				switch resp.Name {
-				case "token-consume":
+		var found int
+		for _, resp := range responses {
+			switch resp.Name {
+			case "token-consume":
+				found++
+				continue
+			case "res-sync":
+				if resp.Res.Kind == "note" {
 					found++
-					continue
-				case "res-sync":
-					if resp.Res.Kind == "note" {
-						found++
-						suite.Equal(sharedRes.ID, resp.Res.ID, "note-id mismatch. expected `%s`, got `%s`", sharedRes.ID, resp.Res.ID)
-						suite.Equal(4, len(resp.Changes[0].Delta.(NoteDelta)), "wrong number of deltas for note")
-					} else if resp.Res.Kind == "folio" {
-						found++
-						// because they way the protocoll works, the *first* delta the server
-						// sent to this session was never acked (b.c. it was sent with an ACK).
-						// thus, the server will include the original "set-nid" change along with
-						// the actual new-note change
-						if suite.Equal(2, len(resp.Changes), "wrong number of changes for folio. expected 2, got %v", resp.Changes) {
-							if suite.Equal(1, len(resp.Changes[1].Delta.(FolioDelta)), "wrong number of changes for folio") {
-								delta := resp.Changes[1].Delta.(FolioDelta)
-								suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received, wanted a `add-noteref`, got `%s`", delta[0].Op)
-								suite.Equal(sharedRes.ID, delta[0].Value.(NoteRef).NID, "wrong nid received in folio-delta")
-							}
+					suite.Equal(shared.ID, resp.Res.ID, "note-id mismatch. expected `%s`, got `%s`", shared.ID, resp.Res.ID)
+					suite.Equal(4, len(resp.Changes[0].Delta.(NoteDelta)), "wrong number of deltas for note")
+				} else if resp.Res.Kind == "folio" {
+					found++
+					// because they way the protocoll works, the *first* delta the server
+					// sent to this session was never acked (b.c. it was sent with an ACK).
+					// thus, the server will include the original "set-nid" change along with
+					// the actual new-note change
+					if suite.Equal(2, len(resp.Changes), "wrong number of changes for folio. expected 2, got %v", resp.Changes) {
+						if suite.Equal(1, len(resp.Changes[1].Delta.(FolioDelta)), "wrong number of changes for folio") {
+							delta := resp.Changes[1].Delta.(FolioDelta)
+							suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received, wanted a `add-noteref`, got `%s`", delta[0].Op)
+							suite.Equal(shared.ID, delta[0].Value.(NoteRef).NID, "wrong nid received in folio-delta")
 						}
 					}
-				default:
-					suite.T().Errorf("Received unexpected event: %v", resp)
-
 				}
-			}
-			suite.Equal(3, found, "not all expected responses received")
+			default:
+				suite.T().Errorf("Received unexpected event: %v", resp)
 
-			// see if sessA got hold of the new peer
-			peersEvent := suite.awaitResponse(connA.ToClient(), "inviter did not get peers update")
-			suite.Equal("res-sync", peersEvent.Name, "got unexpected event-name from connection: %v", peersEvent.Name)
-			suite.Equal("note", peersEvent.Res.Kind, "expected a note-sync, but Res is `%s`", peersEvent.Res.Kind)
-			suite.Equal(sharedRes.ID, peersEvent.Res.ID, "note-id mismatch")
-			if suite.Equal(1, len(peersEvent.Changes), "wrong number of changes") {
-				// see if we got the peers update from sessB
-				deltas := peersEvent.Changes[0].Delta.(NoteDelta)
-				suite.Equal(1, len(deltas), "wrong number of changes")
-				suite.Equal("add-peer", deltas[0].Op, "wrong delta.Op")
-				suite.Equal(sessB.uid, deltas[0].Value.(Peer).User.UID, "wrong peer UID")
-				suite.Equal("active", deltas[0].Value.(Peer).Role, "wrong peer UID")
 			}
 		}
-	}
+		suite.Equal(3, found, "not all expected responses received")
 
+		// see if sessA got hold of the new peer
+		peersEvent := suite.awaitResponse(connA.ToClient(), "inviter did not get peers update")
+		suite.Equal("res-sync", peersEvent.Name, "got unexpected event-name from connection: %v", peersEvent.Name)
+		suite.Equal("note", peersEvent.Res.Kind, "expected a note-sync, but Res is `%s`", peersEvent.Res.Kind)
+		suite.Equal(shared.ID, peersEvent.Res.ID, "note-id mismatch")
+		if suite.Equal(1, len(peersEvent.Changes), "wrong number of changes") {
+			// see if we got the peers update from sessB
+			deltas := peersEvent.Changes[0].Delta.(NoteDelta)
+			suite.Equal(1, len(deltas), "wrong number of changes")
+			suite.Equal("add-peer", deltas[0].Op, "wrong delta.Op")
+			suite.Equal(sessB.uid, deltas[0].Value.(Peer).User.UID, "wrong peer UID")
+			suite.Equal("active", deltas[0].Value.(Peer).Role, "wrong peer UID")
+		}
+	})
 }
 func (suite *SessionTests) TestAnonConsumePhoneShare() {
 	sessA, connA := suite.anonSession()
-	// create new note
-	sharedRes := suite.addNote(sessA, connA)
-	if !suite.NotEqual(Resource{}, sharedRes) {
-		suite.T().Fatal("could not add resource")
-	}
-	err := suite.srv.Store.Patch(sharedRes, Patch{"invite-user", "", User{Phone: "+100012345"}, nil}, context{uid: sessA.uid, ts: time.Now()})
-	if suite.NoError(err, "could not invite user") {
-		event := suite.awaitResponse(connA.ToClient(), "inviter did not get profile update (add contact) after email-share")
-		suite.Equal("res-sync", event.Name, "got unexpected event-name from connection")
-		suite.Equal("profile", event.Res.Kind, "expected a profile-sync")
-		suite.Equal(sessA.uid, event.Res.ID, "profile-id mismatch")
-		if suite.Equal(1, len(event.Changes), "wrong number of changes") {
-			// ACK the sync
-			event.Changes[0].Clock.SV++
-			event.Changes[0].Delta = ProfileDelta{}
-			connA.ClientEvent(event)
+	suite.withShareToken("phone", sessA, connA, func(token string, shared Resource) {
+		// now use the token to create a new anon-user
+		sessB, connB := suite.anonSession()
+		suite.addNote(sessB, connB)
+		connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: token})
+		// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
+		responses := [3]Event{}
+		for i := 0; i < 3; i++ {
+			responses[i] = suite.awaitResponse(connB.ToClient(), "no response from connection")
 		}
-		// no await the note update (add-peer)
-		event = suite.awaitResponse(connA.ToClient(), "inviter did not get note update (add peer) after email-share")
-		suite.Equal("res-sync", event.Name, "got unexpected event-name from connection")
-		suite.Equal("note", event.Res.Kind, "expected a note-sync")
-		suite.Equal(sharedRes.ID, event.Res.ID, "note-id mismatch")
-		if suite.Equal(1, len(event.Changes), "wrong number of changes") {
-			if suite.Equal("add-peer", event.Changes[0].Delta.(NoteDelta)[0].Op, "unexpected note-delta") {
-				// ACK the sync
-				event.Changes[0].Clock.SV++
-				event.Changes[0].Delta = NoteDelta{}
-				connA.ClientEvent(event)
-			}
-		}
-
-		var req CommRequest
-		select {
-		case req = <-suite.comm:
-		case <-time.After(5 * time.Second):
-			suite.T().Fatal("comm-request after invite did not arrive in time")
-		}
-		suite.Equal("phone-invite", req.kind, "CommRequest has wrong kind. expected `phone-invite`, but go `%s`", req, req.kind)
-		if suite.NotEmpty(req.data["token"], "Token missing in CommRequest atfer invite") {
-			// now use the token to create a new anon-user
-			sessB, connB := suite.anonSession()
-			suite.addNote(sessB, connB)
-			connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: req.data["token"]})
-			// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
-			responses := [3]Event{}
-			for i := 0; i < 3; i++ {
-				responses[i] = suite.awaitResponse(connB.ToClient(), "no response from connection")
-			}
-			var found int
-			for _, resp := range responses {
-				switch resp.Name {
-				case "token-consume":
+		var found int
+		for _, resp := range responses {
+			switch resp.Name {
+			case "token-consume":
+				found++
+				continue
+			case "res-sync":
+				if resp.Res.Kind == "note" {
 					found++
-					continue
-				case "res-sync":
-					if resp.Res.Kind == "note" {
-						found++
-						suite.Equal(sharedRes.ID, resp.Res.ID, "note-id mismatch. expected `%s`, got `%s`", sharedRes.ID, resp.Res.ID)
-						suite.Equal(4, len(resp.Changes[0].Delta.(NoteDelta)), "wrong number of deltas for note")
-					} else if resp.Res.Kind == "folio" {
-						found++
-						// because they way the protocoll works, the *first* delta the server
-						// sent to this session was never acked (b.c. it was sent with an ACK).
-						// thus, the server will include the original "set-nid" change along with
-						// the actual new-note change
-						if suite.Equal(2, len(resp.Changes), "wrong number of changes for folio. expected 2, got %v", resp.Changes) {
-							if suite.Equal(1, len(resp.Changes[1].Delta.(FolioDelta)), "wrong number of changes for folio") {
-								delta := resp.Changes[1].Delta.(FolioDelta)
-								suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received, wanted a `add-noteref`, got `%s`", delta[0].Op)
-								suite.Equal(sharedRes.ID, delta[0].Value.(NoteRef).NID, "wrong nid received in folio-delta")
-							}
+					suite.Equal(shared.ID, resp.Res.ID, "note-id mismatch")
+					suite.Equal(4, len(resp.Changes[0].Delta.(NoteDelta)), "wrong number of deltas for note")
+				} else if resp.Res.Kind == "folio" {
+					found++
+					// because they way the protocoll works, the *first* delta the server
+					// sent to this session was never acked (b.c. it was sent with an ACK).
+					// thus, the server will include the original "set-nid" change along with
+					// the actual new-note change
+					if suite.Equal(2, len(resp.Changes), "wrong number of changes for folio. expected 2, got %v", resp.Changes) {
+						if suite.Equal(1, len(resp.Changes[1].Delta.(FolioDelta)), "wrong number of changes for folio") {
+							delta := resp.Changes[1].Delta.(FolioDelta)
+							suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received, wanted a `add-noteref`, got `%s`", delta[0].Op)
+							suite.Equal(shared.ID, delta[0].Value.(NoteRef).NID, "wrong nid received in folio-delta")
 						}
 					}
-				default:
-					suite.T().Errorf("Received unexpected event: %v", resp)
-
 				}
-			}
-			suite.Equal(3, found, "not all expected responses received")
+			default:
+				suite.T().Errorf("Received unexpected event: %v", resp)
 
-			// see if sessA got hold of the new peer
-			peersEvent := suite.awaitResponse(connA.ToClient(), "inviter did not get peers update")
-			suite.Equal("res-sync", peersEvent.Name, "got unexpected event-name from connection: %v", peersEvent.Name)
-			suite.Equal("note", peersEvent.Res.Kind, "expected a note-sync, but Res is `%s`", peersEvent.Res.Kind)
-			suite.Equal(sharedRes.ID, peersEvent.Res.ID, "note-id mismatch")
-			if suite.Equal(1, len(peersEvent.Changes), "wrong number of changes") {
-				// see if we got the peers update from sessB
-				deltas := peersEvent.Changes[0].Delta.(NoteDelta)
-				suite.Equal(1, len(deltas), "wrong number of changes")
-				suite.Equal("add-peer", deltas[0].Op, "wrong delta.Op")
-				suite.Equal(sessB.uid, deltas[0].Value.(Peer).User.UID, "wrong peer UID")
-				suite.Equal("active", deltas[0].Value.(Peer).Role, "wrong peer UID")
 			}
 		}
-	}
+		suite.Equal(3, found, "not all expected responses received")
 
+		// see if sessA got hold of the new peer
+		peersEvent := suite.awaitResponse(connA.ToClient(), "inviter did not get peers update")
+		suite.Equal("res-sync", peersEvent.Name, "got unexpected event-name from connection: %v", peersEvent.Name)
+		suite.Equal("note", peersEvent.Res.Kind, "expected a note-sync, but Res is `%s`", peersEvent.Res.Kind)
+		suite.Equal(shared.ID, peersEvent.Res.ID, "note-id mismatch")
+		if suite.Equal(1, len(peersEvent.Changes), "wrong number of changes") {
+			// see if we got the peers update from sessB
+			deltas := peersEvent.Changes[0].Delta.(NoteDelta)
+			suite.Equal(1, len(deltas), "wrong number of changes")
+			suite.Equal("add-peer", deltas[0].Op, "wrong delta.Op")
+			suite.Equal(sessB.uid, deltas[0].Value.(Peer).User.UID, "wrong peer UID")
+			suite.Equal("active", deltas[0].Value.(Peer).Role, "wrong peer UID")
+		}
+	})
 }
 
 func (suite *SessionTests) TestAnonLogin() {
@@ -660,12 +642,7 @@ func (suite *SessionTests) TestAnonWithVerifyEmailToken() {
 func (suite *SessionTests) TestUserConsumeURLShare() {
 	sessA, connA := suite.anonSession()
 	// create new note
-	sharedRes := suite.addNote(sessA, connA)
-	if !suite.NotEqual(Resource{}, sharedRes) {
-		suite.T().Fatal("could not add share-note")
-	}
-	note := sharedRes.Value.(Note)
-	if suite.NotEmpty(note.SharingToken, "sharingtoken missing in newly created note") {
+	suite.withShareToken("url", sessA, connA, func(shareToken string, shared Resource) {
 		// now use the token to create a new anon-user
 		user := suite.createUserWith2Notes("test")
 		token, err := suite.srv.loginToken(user.UID)
@@ -675,7 +652,7 @@ func (suite *SessionTests) TestUserConsumeURLShare() {
 		resp := suite.awaitResponse(connB.ToClient(), "session-create response did not arrive")
 		sessB := resp.Session
 
-		connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: note.SharingToken})
+		connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: shareToken})
 		// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
 		responses := [3]Event{}
 		for i := 0; i < 3; i++ {
@@ -690,7 +667,7 @@ func (suite *SessionTests) TestUserConsumeURLShare() {
 			case "res-sync":
 				if resp.Res.Kind == "note" {
 					found++
-					suite.Equal(sharedRes.ID, resp.Res.ID, "note-id mismatch")
+					suite.Equal(shared.ID, resp.Res.ID, "note-id mismatch")
 					// expecting 3 deltas: set-token & 2*add-peer (sessA and sessB users)
 					suite.Equal(3, len(resp.Changes[0].Delta.(NoteDelta)), "wrong number of deltas for note")
 				} else if resp.Res.Kind == "folio" {
@@ -699,7 +676,7 @@ func (suite *SessionTests) TestUserConsumeURLShare() {
 						if suite.Equal(1, len(resp.Changes[0].Delta.(FolioDelta)), "wrong number of changes for folio") {
 							delta := resp.Changes[0].Delta.(FolioDelta)
 							suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received, wanted a `add-noteref`, got `%s`", delta[0].Op)
-							suite.Equal(sharedRes.ID, delta[0].Value.(NoteRef).NID, "wrong nid received in folio-delta")
+							suite.Equal(shared.ID, delta[0].Value.(NoteRef).NID, "wrong nid received in folio-delta")
 						}
 					}
 				}
@@ -714,7 +691,7 @@ func (suite *SessionTests) TestUserConsumeURLShare() {
 		peersEvent := suite.awaitResponse(connA.ToClient(), "inviter did not get peers update")
 		suite.Equal("res-sync", peersEvent.Name, "got unexpected event-name from connection: %v", peersEvent.Name)
 		suite.Equal("note", peersEvent.Res.Kind, "expected a note-sync, but Res is `%s`", peersEvent.Res.Kind)
-		suite.Equal(sharedRes.ID, peersEvent.Res.ID, "note-id mismatch")
+		suite.Equal(shared.ID, peersEvent.Res.ID, "note-id mismatch")
 		if suite.Equal(1, len(peersEvent.Changes), "wrong number of changes") {
 			// see if we got the peers update from sessB
 			deltas := peersEvent.Changes[0].Delta.(NoteDelta)
@@ -723,7 +700,8 @@ func (suite *SessionTests) TestUserConsumeURLShare() {
 			suite.Equal(sessB.uid, deltas[0].Value.(Peer).User.UID, "wrong peer UID")
 			suite.Equal("active", deltas[0].Value.(Peer).Role, "wrong peer UID")
 		}
-	}
+	})
+}
 
 }
 
