@@ -86,6 +86,16 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 		// patch.Path emtpy
 		// patch.Value contains User object (maybe without UID)
 		// patch.OldValue empty
+		// check if current user is not anon
+		profile := Resource{Kind: "profile", ID: ctx.uid}
+		if err := store.Load(&profile); err != nil {
+			return err
+		}
+		if profile.Value.(Profile).User.Tier < 1 {
+			// anon users are not allowed to invite. the ui should
+			// never attempt to do this, thus we'll safely ignore the patch
+			return nil
+		}
 		userRef := patch.Value.(User)
 		if userRef.Email != "" {
 			userRef.EmailStatus = "invited"
