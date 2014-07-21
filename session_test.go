@@ -726,6 +726,69 @@ func (suite *SessionTests) TestUserConsumePhoneShare() {
 	})
 }
 
+func (suite *SessionTests) TestWithVerifyEmailToken() {
+	userA := suite.createUserWith2Notes("inviter")
+	sessA, connA := suite.loginUser(userA)
+	// share to notes wiht test@hiroapp.com
+	var shared Resource
+	suite.withShareToken("email", sessA, connA, func(shareToken string, res Resource) {
+		shared = res
+	})
+
+	// create a user who will signup as test and create 1 note on his own
+	userB := suite.createUserWith2Notes("test")
+	sessB, connB := suite.loginUser(userB)
+	suite.srv.Store.Patch(Resource{Kind: "profile", ID: userB.UID}, Patch{"set-email", "user/", "test@hiroapp.com", ""}, context{uid: userB.UID})
+	// check for verification-req
+	var req CommRequest
+	select {
+	case req = <-suite.comm:
+	case <-time.After(5 * time.Second):
+		suite.T().Fatal("comm-request after set-email did not arrive in time")
+	}
+
+	suite.Equal("email-verify", req.kind, "CommRequest has wrong kind. expected `email-verify`, but got `%s`", req, req.kind)
+	if suite.NotEmpty(req.data["token"], "Token missing in CommRequest atfer email-set") {
+		// login "test" user and cosume the verification token
+		connB.ClientEvent(Event{SID: sessB.sid, Name: "session-create", Token: req.data["token"]})
+		resp := suite.awaitResponse(connB.ToClient(), "session-create response (of invitee) did not arrive")
+		// overwrite old (anon)session
+		if resp.Session == nil {
+			suite.T().Fatal("empty session received")
+		}
+		// overwrite with newly created session
+		sessB = resp.Session
+		suite.Equal(userB.UID, sessB.uid)
+		suite.Equal(5, len(sessA.shadows), "verify user should have 5 shadows (profile, folio, 3*note)")
+
+		// check if returned session matches user.UID
+		shadow := extractShadow(sessB, "profile")
+		if suite.NotNil(shadow, "returned session did not contain a profile shadow") {
+			profile := shadow.res.Value.(Profile)
+			suite.Equal(userB.UID, profile.User.UID, "new session's profile-user has wrong UID")
+			suite.Equal(1, profile.User.Tier, "new session's user is not signed up")
+
+			// check if the email is verified
+			err := suite.srv.Store.Load(&shadow.res)
+			suite.NoError(err, "cannot load profile-data from store")
+			suite.Equal("verified", shadow.res.Value.(Profile).User.EmailStatus, "email is not `verified`")
+		}
+		shadow = extractShadow(sessB, "folio")
+		if suite.NotNil(shadow, "returned session did not contain a folio shadow") {
+			folio := shadow.res.Value.(Folio)
+			suite.Equal(3, len(folio), "folio has the wrong number of notes")
+			found := false
+			for i := range folio {
+				if shared.ID == folio[i].NID {
+					found = true
+					break
+				}
+			}
+			suite.Equal(true, found, "previously shared note missing in new folio")
+		}
+	}
+}
+
 func (suite *SessionTests) addNote(sess *Session, conn *Conn) Resource {
 	conn.ClientEvent(Event{Name: "res-sync",
 		SID:     sess.sid,
