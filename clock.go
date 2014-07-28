@@ -25,7 +25,7 @@ type VersionsDivergedError struct {
 }
 
 func (c VersionsDivergedError) Error() string {
-	return fmt.Sprintf("client: %v server: %v", c.server, c.client)
+	return fmt.Sprintf("client: %v server: %v", c.client, c.server)
 }
 
 type SessionClock struct {

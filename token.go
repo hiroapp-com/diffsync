@@ -201,7 +201,7 @@ func (tok *HiroTokens) getToken(plain string) (Token, error) {
 	h := sha512.New()
 	io.WriteString(h, plain)
 	hashed := hex.EncodeToString(h.Sum(nil))
-	log.Println("Looking for token (byte: `%v`) with hash %s", tok, hashed)
+	log.Printf("Looking for token (byte: `%v`) with hash %s", tok, hashed)
 	token := Token{}
 	err := tok.db.QueryRow("SELECT token, kind, uid, nid, email, phone FROM tokens where token = ? AND consumed_at IS NULL", hashed).Scan(&token.Key, &token.Kind, &token.UID, &token.NID, &token.Email, &token.Phone)
 	if err == sql.ErrNoRows {
@@ -311,7 +311,7 @@ func (tok *HiroTokens) sweepInvites(uid, kind, to_verify string) (invitedNIDs []
 }
 
 func (err TokenDoesNotexistError) Error() string {
-	return fmt.Sprintf("token `%s` invalid or expired")
+	return fmt.Sprintf("token `%s` invalid or expired", string(err))
 }
 
 func generateToken() (string, string) {

@@ -46,7 +46,7 @@ func (notify NotifyListener) Run(subscriptions SubscriberChecker, sesshub chan<-
 			sesshub <- Event{Name: event.Name, SID: subs[i][0], Res: res, store: event.store, ctx: event.ctx}
 		}
 	}
-	log.Printf("notify (%v) channel closed, shutting down, notify")
+	log.Printf("notify (%v) channel closed, shutting down, notify", notify)
 }
 
 func NewNotifyListener(buffer int) NotifyListener {
