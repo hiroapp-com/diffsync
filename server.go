@@ -16,10 +16,10 @@ type Server struct {
 	*SessionHub
 }
 
-func NewServer(db *sql.DB, comm comm.Handler) (*Server, error) {
+func NewServer(db *sql.DB, handler comm.Handler) (*Server, error) {
 	srv := &Server{db: db}
 	srv.NotifyListener = make(NotifyListener, 250)
-	srv.Store = NewStore(srv.NotifyListener, comm)
+	srv.Store = NewStore(srv.NotifyListener, handler)
 	srv.SessionBackend = NewSQLSessions(db)
 	srv.SessionHub = NewSessionHub(srv.SessionBackend)
 	srv.TokenConsumer = NewHiroTokens(srv.SessionBackend, srv.SessionHub, db)
