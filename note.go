@@ -52,6 +52,15 @@ func NewNote(text string) Note {
 	return Note{Text: TextValue(text), CreatedAt: UnixTime(time.Time{}), Peers: []Peer{}}
 }
 
+func (t *UnixTime) Scan(src interface{}) error {
+	tmp, ok := src.(time.Time)
+	if !ok {
+		return fmt.Errorf("received non-Time value for unixtime from database")
+	}
+	*t = UnixTime(tmp)
+	return nil
+}
+
 func (t UnixTime) MarshalJSON() ([]byte, error) {
 	ts := time.Time(t).UnixNano()
 	// note: we want to output ms, convert ns to ms
@@ -86,11 +95,11 @@ func (pl PeerList) indexFromPath(path string) (int, bool) {
 		checkFn = func(p Peer) bool {
 			return p.User.UID == path[4:]
 		}
-	case len(path) > 5 && path[:6] == "email":
+	case len(path) > 5 && path[:6] == "email:":
 		checkFn = func(p Peer) bool {
 			return p.User.Email == path[6:]
 		}
-	case len(path) > 5 && path[:6] == "phone":
+	case len(path) > 5 && path[:6] == "phone:":
 		checkFn = func(p Peer) bool {
 			return p.User.Phone == path[6:]
 		}
@@ -247,6 +256,12 @@ func (delta NoteDelta) Apply(to ResourceValue) (ResourceValue, []Patch, error) {
 	patches := []Patch{}
 	for _, diff := range delta {
 		switch diff.Op {
+		case "set-ts":
+			// TODO(flo) s/set-ts/set-seen/
+			if !strings.HasPrefix(diff.Path, "peers/uid:") {
+				break
+			}
+			patches = append(patches, Patch{Op: "set-seen", Path: diff.Path[10:]})
 		case "set-title":
 			newres.Title = diff.Value.(string)
 			patches = append(patches, Patch{Op: "title", Value: newres.Title, OldValue: original.Title})
@@ -317,13 +332,20 @@ func diffPeerMeta(lhs, rhs Peer) NoteDelta {
 	if lhs.CursorPosition != rhs.CursorPosition {
 		delta = append(delta, NoteDeltaElement{"set-cursor", path, rhs.CursorPosition})
 	}
-	if rhs.LastSeen != nil && lhs.LastSeen != nil && time.Time(*lhs.LastSeen).Before(time.Time(*rhs.LastSeen)) {
+	if rhs.LastSeen == nil && lhs.LastSeen == nil {
+		//nothing to do here. LastEdit can also not be different, since
+		// it cannotbe that last_seen is nil, but not last_edit
+		return delta
+	} else if lhs.LastSeen == nil || time.Time(*lhs.LastSeen).Before(time.Time(*rhs.LastSeen)) {
+		// rhs is now != nil
 		timestamps := Timestamp{Seen: rhs.LastSeen}
-
-		if rhs.LastEdit != nil && time.Time(*lhs.LastEdit).Before(time.Time(*rhs.LastEdit)) {
+		if lhs.LastEdit == nil && rhs.LastEdit == nil {
+			delta = append(delta, NoteDeltaElement{"set-ts", path, timestamps})
+			return delta
+		} else if lhs.LastEdit == nil || time.Time(*lhs.LastEdit).Before(time.Time(*rhs.LastEdit)) {
 			timestamps.Edit = rhs.LastEdit
+			delta = append(delta, NoteDeltaElement{"set-ts", path, timestamps})
 		}
-		delta = append(delta, NoteDeltaElement{"set-ts", path, timestamps})
 	}
 	return delta
 }

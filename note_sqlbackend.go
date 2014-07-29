@@ -3,10 +3,12 @@ package diffsync
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"database/sql"
 
+	"github.com/hiro/hync/comm"
 	DMP "github.com/sergi/go-diff/diffmatchpatch"
 )
 
@@ -37,15 +39,19 @@ func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 	note.CreatedAt = UnixTime(createdAt)
 	note.CreatedBy = User{UID: createdBy}
 	peers := PeerList{}
-	rows, err := backend.db.Query("SELECT uid, cursor_pos, last_seen, last_edit, role FROM noterefs WHERE nid = ?", key)
+	rows, err := backend.db.Query("SELECT nr.uid, users.email, nr.cursor_pos, nr.last_seen, nr.last_edit, nr.role FROM noterefs as nr LEFT OUTER JOIN users ON (users.uid = nr.uid and users.email_status in ('verified', 'invited')) WHERE nid = ?", key)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		peer := Peer{User: User{}}
-		if err := rows.Scan(&peer.User.UID, &peer.CursorPosition, &peer.LastSeen, &peer.LastEdit, &peer.Role); err != nil {
+		var email sql.NullString
+		if err := rows.Scan(&peer.User.UID, &email, &peer.CursorPosition, &peer.LastSeen, &peer.LastEdit, &peer.Role); err != nil {
 			return nil, err
+		}
+		if email.Valid {
+			peer.User.Email = email.String
 		}
 		peers = append(peers, peer)
 	}
@@ -68,7 +74,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 			return fmt.Errorf("notesqlbackend: note(%s) could not be patched. patch: `%v`, err: `%s`", nid, patch.Value, err)
 		}
 		if err = backend.pokeTimers(nid, true, ctx); err != nil {
-			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s", nid, ctx.uid)
+			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
 	case "title":
 		// patch.Path empty
@@ -80,27 +86,28 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 		}
 		numChanges, _ := res.RowsAffected()
 		if err = backend.pokeTimers(nid, numChanges > 0, ctx); err != nil {
-			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s", nid, ctx.uid)
+			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
 	case "invite-user":
 		// patch.Path emtpy
 		// patch.Value contains User object (maybe without UID)
 		// patch.OldValue empty
 		// check if current user is not anon
-		profile := Resource{Kind: "profile", ID: ctx.uid}
-		if err := store.Load(&profile); err != nil {
-			return err
-		}
-		if profile.Value.(Profile).User.Tier < 1 {
-			// anon users are not allowed to invite. the ui should
-			// never attempt to do this, thus we'll safely ignore the patch
-			return nil
-		}
+		//profile := Resource{Kind: "profile", ID: ctx.uid}
+		//if err := store.Load(&profile); err != nil {
+		//	return err
+		//}
+		//if profile.Value.(Profile).User.Tier < 1 {
+		//	// anon users are not allowed to invite. the ui should
+		//	// never attempt to do this, thus we'll safely ignore the patch
+		//	return nil
+		//}
 		userRef := patch.Value.(User)
 		if userRef.Email != "" {
+			userRef.Name = userRef.Email
 			userRef.EmailStatus = "invited"
-		}
-		if userRef.Phone != "" {
+		} else if userRef.Phone != "" {
+			userRef.Name = userRef.Phone
 			userRef.PhoneStatus = "invited"
 		}
 		userRef.Tier = -1
@@ -144,6 +151,16 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 		_, err := backend.db.Exec("DELETE FROM noterefs WHERE nid = ? AND uid = ?", nid, patch.Path)
 		if err != nil {
 			return err
+		}
+	case "set-seen":
+		// patch.Path contains UID of peer who has seen stuff
+		// patch.Value empty
+		// patch.OldValue empty
+		if ctx.uid != patch.Path {
+			return fmt.Errorf("cannot set seen for user other than context user. %s != %s ", ctx.uid, patch.Path)
+		}
+		if err := backend.pokeTimers(nid, true, ctx); err != nil {
+			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
 	}
 	return nil
@@ -195,7 +212,7 @@ func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch) error {
 
 func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx context) (err error) {
 	if edited {
-		_, err = backend.db.Exec("UPDATE noterefs SET last_seen = datetime('now') last_edit = datetime('now') WHERE nid = ? AND uid = ?", id, ctx.uid)
+		_, err = backend.db.Exec("UPDATE noterefs SET last_seen = datetime('now'), last_edit = datetime('now') WHERE nid = ? AND uid = ?", id, ctx.uid)
 	} else {
 		_, err = backend.db.Exec("UPDATE noterefs SET last_seen = datetime('now') WHERE nid = ? AND uid = ?", id, ctx.uid)
 	}
