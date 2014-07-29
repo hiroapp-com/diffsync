@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hiro/hync/comm"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -18,7 +19,7 @@ type SessionTests struct {
 	dbPath string
 	suite.Suite
 	srv  *Server
-	comm chan CommRequest
+	comm chan comm.Request
 }
 
 func (suite *SessionTests) SetupTest() {
@@ -30,8 +31,11 @@ func (suite *SessionTests) SetupTest() {
 	if err = resetDB(db); err != nil {
 		suite.T().Fatal("cannot reset db")
 	}
-	suite.comm = make(chan CommRequest, 16)
-	suite.srv, err = NewServer(db, suite.comm)
+	suite.comm = make(chan comm.Request, 1)
+	suite.srv, err = NewServer(db, func(req comm.Request) error {
+		suite.comm <- req
+		return nil
+	})
 	if err != nil {
 		suite.T().Fatal("cannot spawn server", err)
 	}
@@ -236,18 +240,18 @@ func (suite *SessionTests) TestVisitorWithVerifyEmailToken() {
 	user := suite.createUserWith2Notes("test")
 	suite.srv.Store.Patch(Resource{Kind: "profile", ID: user.UID}, Patch{"set-email", "user/", "test@hiroapp.com", ""}, context{uid: user.UID})
 	// check for verification-req
-	var req CommRequest
+	var req comm.Request
 	select {
 	case req = <-suite.comm:
 	case <-time.After(5 * time.Second):
 		suite.T().Fatal("comm-request after set-email did not arrive in time")
 	}
 
-	suite.Equal("email-verify", req.kind, "CommRequest has wrong kind. expected `email-verify`, but got `%s`", req, req.kind)
-	if suite.NotEmpty(req.data["token"], "Token missing in CommRequest atfer invite") {
+	suite.Equal("verify", req.Kind, "comm.Request has wrong kind. expected `verify`, but got `%s`", req, req.Kind)
+	if suite.NotEmpty(req.Data["token"], "Token missing in comm.Request atfer invite") {
 		// now use the token to create a new anon-user
 		connA := suite.srv.NewConn()
-		connA.ClientEvent(Event{Name: "session-create", Token: req.data["token"]})
+		connA.ClientEvent(Event{Name: "session-create", Token: req.Data["token"]})
 		resp := suite.awaitResponse(connA.ToClient(), "session-create response (of invitee) did not arrive")
 		sessA := resp.Session
 		// now check if sessB has all it should have
@@ -328,7 +332,6 @@ func (suite *SessionTests) withShareToken(kind string, sess *Session, conn *Conn
 		suite.T().Fatal("could not add resource")
 	}
 	var invitee User
-	var expectedCommunication string
 	switch kind {
 	case "url":
 		note := sharedRes.Value.(Note)
@@ -338,10 +341,8 @@ func (suite *SessionTests) withShareToken(kind string, sess *Session, conn *Conn
 		return
 	case "email":
 		invitee = User{Email: "test@hiroapp.com"}
-		expectedCommunication = "email-invite"
 	case "phone":
 		invitee = User{Phone: "+100012345"}
-		expectedCommunication = "phone-invite"
 	}
 	err := suite.srv.Store.Patch(sharedRes, Patch{"invite-user", "", invitee, nil}, context{uid: sess.uid, ts: time.Now()})
 	if suite.NoError(err, "could not invite user") {
@@ -369,15 +370,15 @@ func (suite *SessionTests) withShareToken(kind string, sess *Session, conn *Conn
 			}
 		}
 
-		var req CommRequest
+		var req comm.Request
 		select {
 		case req = <-suite.comm:
 		case <-time.After(5 * time.Second):
 			suite.T().Fatal("comm-request after invite did not arrive in time")
 		}
-		suite.Equal(expectedCommunication, req.kind, "CommRequest has wrong kind")
-		if suite.NotEmpty(req.data["token"], "Token missing in CommRequest atfer invite") {
-			fn(req.data["token"], sharedRes)
+		suite.Equal("invite", req.Kind, "comm.Request has wrong kind")
+		if suite.NotEmpty(req.Data["token"], "Token missing in comm.Request atfer invite") {
+			fn(req.Data["token"], sharedRes)
 		}
 	}
 }
@@ -520,15 +521,15 @@ func (suite *SessionTests) TestAnonWithVerifyEmailToken() {
 	user := suite.createUserWith2Notes("test")
 	suite.srv.Store.Patch(Resource{Kind: "profile", ID: user.UID}, Patch{"set-email", "user/", "test@hiroapp.com", ""}, context{uid: user.UID})
 	// check for verification-req
-	var req CommRequest
+	var req comm.Request
 	select {
 	case req = <-suite.comm:
 	case <-time.After(5 * time.Second):
 		suite.T().Fatal("comm-request after set-email did not arrive in time")
 	}
 
-	suite.Equal("email-verify", req.kind, "CommRequest has wrong kind. expected `email-verify`, but got `%s`", req, req.kind)
-	if suite.NotEmpty(req.data["token"], "Token missing in CommRequest atfer invite") {
+	suite.Equal("verify", req.Kind, "comm.Request has wrong kind. expected `verify`, but got `%s`", req, req.Kind)
+	if suite.NotEmpty(req.Data["token"], "Token missing in comm.Request atfer invite") {
 		// now use the token to create a new anon-user
 		sessA, connA := suite.anonSession()
 		// create new note
@@ -536,7 +537,7 @@ func (suite *SessionTests) TestAnonWithVerifyEmailToken() {
 		if !suite.NotEqual(Resource{}, res) {
 			suite.T().Fatal("could not add resource")
 		}
-		connA.ClientEvent(Event{SID: sessA.sid, Name: "session-create", Token: req.data["token"]})
+		connA.ClientEvent(Event{SID: sessA.sid, Name: "session-create", Token: req.Data["token"]})
 		resp := suite.awaitResponse(connA.ToClient(), "session-create response (of invitee) did not arrive")
 		// overwrite old (anon)session
 		if resp.Session == nil {
@@ -740,17 +741,17 @@ func (suite *SessionTests) TestWithVerifyEmailToken() {
 	sessB, connB := suite.loginUser(userB)
 	suite.srv.Store.Patch(Resource{Kind: "profile", ID: userB.UID}, Patch{"set-email", "user/", "test@hiroapp.com", ""}, context{uid: userB.UID})
 	// check for verification-req
-	var req CommRequest
+	var req comm.Request
 	select {
 	case req = <-suite.comm:
 	case <-time.After(5 * time.Second):
 		suite.T().Fatal("comm-request after set-email did not arrive in time")
 	}
 
-	suite.Equal("email-verify", req.kind, "CommRequest has wrong kind. expected `email-verify`, but got `%s`", req, req.kind)
-	if suite.NotEmpty(req.data["token"], "Token missing in CommRequest atfer email-set") {
+	suite.Equal("verify", req.Kind, "comm.Request has wrong kind. expected `verify`")
+	if suite.NotEmpty(req.Data["token"], "Token missing in comm.Request atfer email-set") {
 		// login "test" user and cosume the verification token
-		connB.ClientEvent(Event{SID: sessB.sid, Name: "session-create", Token: req.data["token"]})
+		connB.ClientEvent(Event{SID: sessB.sid, Name: "session-create", Token: req.Data["token"]})
 		resp := suite.awaitResponse(connB.ToClient(), "session-create response (of invitee) did not arrive")
 		// overwrite old (anon)session
 		if resp.Session == nil {

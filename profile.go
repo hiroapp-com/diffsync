@@ -35,6 +35,61 @@ type Profile struct {
 	Contacts []User `json:"contacts"`
 }
 
+type emailRcpt User
+type phoneRcpt User
+type preferredRcpt User
+
+func (rcpt emailRcpt) Addr() (string, string) {
+	return User(rcpt).Email, "email"
+}
+func (rcpt emailRcpt) DisplayName() string {
+	u := User(rcpt)
+	return firstNonEmpty(u.Name, u.Email, "Anonymous")
+}
+
+func (rcpt phoneRcpt) Addr() (string, string) {
+	return User(rcpt).Phone, "phone"
+}
+
+func (rcpt phoneRcpt) DisplayName() string {
+	u := User(rcpt)
+	return firstNonEmpty(u.Name, u.Phone, "Anonymous")
+}
+
+func (rcpt preferredRcpt) Addr() (string, string) {
+	u := User(rcpt)
+	switch {
+	case u.Phone != "" && u.PhoneStatus != "unverified":
+		// verified or invited phone has preference over all
+		return u.Phone, "phone"
+	case u.Phone != "" && u.Email != "" && u.EmailStatus == "unverified":
+		// both phone and email are unverified, give phone preference
+		return u.Phone, "phone"
+	case u.Phone != "" && u.Email == "":
+		// unverified phone nr is everything we have
+		return u.Phone, "phone"
+	case u.Email != "":
+		// email (any status) is everything we've got. use that
+		return u.Email, "email"
+	default:
+		// have nothing. ignore
+		return "", ""
+
+	}
+}
+
+func (rcpt preferredRcpt) DisplayName() string {
+	u := User(rcpt)
+	switch _, kind := rcpt.Addr(); kind {
+	case "email":
+		return firstNonEmpty(u.Name, u.Email, "Anonymous")
+	case "phone":
+		return firstNonEmpty(u.Name, u.Phone, "Anonymous")
+	default:
+		return ""
+	}
+}
+
 func NewProfile() Profile {
 	return Profile{User{}, []User{}}
 }

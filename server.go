@@ -3,6 +3,8 @@ package diffsync
 import (
 	"database/sql"
 	"errors"
+
+	"github.com/hiro/hync/comm"
 )
 
 type Server struct {
@@ -14,10 +16,10 @@ type Server struct {
 	*SessionHub
 }
 
-func NewServer(db *sql.DB, comm chan<- CommRequest) (*Server, error) {
+func NewServer(db *sql.DB, comm comm.Handler) (*Server, error) {
 	srv := &Server{db: db}
 	srv.NotifyListener = make(NotifyListener, 250)
-	srv.Store = NewStore(db, srv.NotifyListener, comm)
+	srv.Store = NewStore(srv.NotifyListener, comm)
 	srv.SessionBackend = NewSQLSessions(db)
 	srv.SessionHub = NewSessionHub(srv.SessionBackend)
 	srv.TokenConsumer = NewHiroTokens(srv.SessionBackend, srv.SessionHub, db)

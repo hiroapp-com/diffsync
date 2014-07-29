@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log"
 
-	"database/sql"
+	"github.com/hiro/hync/comm"
 )
 
 var (
@@ -21,16 +21,9 @@ type ResourceBackend interface {
 }
 
 type Store struct {
-	backends map[string]ResourceBackend
-	comm     chan<- CommRequest
-	notify   chan<- Event
-	userDB   *sql.DB
-}
-
-type CommRequest struct {
-	uid  string
-	kind string
-	data map[string]string
+	backends    map[string]ResourceBackend
+	commHandler comm.Handler
+	notify      chan<- Event
 }
 
 type Patch struct {
@@ -49,8 +42,8 @@ type InvalidValueError struct {
 	val interface{}
 }
 
-func NewStore(userDB *sql.DB, notify chan<- Event, comm chan<- CommRequest) *Store {
-	return &Store{backends: map[string]ResourceBackend{}, userDB: userDB, notify: notify, comm: comm}
+func NewStore(notify chan<- Event, comm comm.Handler) *Store {
+	return &Store{backends: map[string]ResourceBackend{}, notify: notify, commHandler: comm}
 }
 
 func (store *Store) Mount(kind string, backend ResourceBackend) {
@@ -103,65 +96,6 @@ func (store *Store) NotifyTaint(kind, id string, ctx context) {
 	default:
 		log.Printf("store: cannot send `res-taint`, notify channel not writable.\n")
 	}
-}
-
-func (store *Store) SendVerifyEmailToken(uid string, email string) {
-	//TODO find better place for this method
-	txn, err := store.userDB.Begin() // TODO(flo) rename userDB > db OR find better place for this
-	if err != nil {
-		// cannot process right now
-		return
-	}
-	token, hashed := generateToken()
-	_, err = txn.Exec("INSERT INTO tokens (token, kind, uid, email) VALUES (?, 'verify', ?, ?)", hashed, uid, email)
-	if err != nil {
-		txn.Rollback()
-		return
-	}
-	select {
-	case store.comm <- CommRequest{uid: uid, kind: "email-verify", data: map[string]string{"token": token}}:
-	default:
-		txn.Rollback()
-		return
-	}
-	txn.Commit()
-}
-func (store *Store) SendInvitation(user User, nid string) {
-	//TODO find better place for this method
-	txn, err := store.userDB.Begin() // TODO(flo) rename userDB > db OR find better place for this
-	if err != nil {
-		// cannot process right now
-		return
-	}
-	token, hashed := generateToken()
-	commReq := CommRequest{uid: user.UID, data: map[string]string{"token": token}}
-	switch {
-	case user.Phone != "":
-		// TODO(flo) do we want to insert user.Phone into the token already?
-		commReq.kind = "phone-invite"
-		_, err = txn.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES (?, 'share-phone', ?, ?)", hashed, user.UID, nid)
-		if err != nil {
-			txn.Rollback()
-			return
-		}
-	case user.Email != "":
-		commReq.kind = "email-invite"
-		_, err = txn.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES (?, 'share-email', ?, ?)", hashed, user.UID, nid)
-		if err != nil {
-			txn.Rollback()
-			return
-		}
-	default:
-		txn.Rollback()
-		return
-	}
-	select {
-	case store.comm <- commReq:
-	default:
-		txn.Rollback()
-		return
-	}
-	txn.Commit()
 }
 
 func (err InvalidValueError) Error() string {

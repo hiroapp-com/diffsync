@@ -52,7 +52,7 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 	sid := generateSID()
 	var profile Resource
 	switch token.Kind {
-	case "anon", "share-email", "share-phone", "share-url":
+	case "anon", "share", "share-url":
 		// anon token
 		// create new blank user
 		profile, err = store.NewResource("profile", context{sid: sid})

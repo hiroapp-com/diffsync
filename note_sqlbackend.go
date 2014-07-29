@@ -125,7 +125,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 			return fmt.Errorf("could not create note-ref for invitee: nid: %s, uid: %s", nid, user.UID)
 		}
 		if affected, _ := res.RowsAffected(); affected > 0 {
-			store.SendInvitation(user, nid)
+			go backend.sendInvite(user, nid, store, ctx)
 		}
 		// taint profile so its and it's contact's contact lists get updated
 		store.NotifyTaint("profile", ctx.uid, ctx)
@@ -217,6 +217,59 @@ func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx context) (e
 		_, err = backend.db.Exec("UPDATE noterefs SET last_seen = datetime('now') WHERE nid = ? AND uid = ?", id, ctx.uid)
 	}
 	return
+}
+
+func (backend NoteSQLBackend) sendInvite(user User, nid string, store *Store, ctx context) {
+	rcpt := preferredRcpt(user)
+	token, hashed := generateToken()
+	reqData := map[string]string{"token": token}
+	// get info from inviter
+	res := Resource{Kind: "profile", ID: ctx.uid}
+	inviter := User{}
+	if err := store.Load(&res); err != nil {
+		log.Printf("error: sendInvite could not fetch profile info of inviter; err: %v", err)
+	} else {
+		inviter = res.Value.(Profile).User
+	}
+	// store hashed token and recipient-address
+	var err error
+	switch addr, addrKind := rcpt.Addr(); addrKind {
+	case "phone":
+		reqData["inviter_name"] = firstNonEmpty(inviter.Name, inviter.Phone, inviter.Email, "Anonymous")
+		reqData["inviter_addr"] = firstNonEmpty(inviter.Phone, inviter.Email, "number unknown")
+		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, phone) VALUES (?, 'share', ?, ?, ?)", hashed, user.UID, nid, addr)
+	case "email":
+		reqData["inviter_name"] = firstNonEmpty(inviter.Name, inviter.Email, inviter.Phone, "Anonymous")
+		reqData["inviter_addr"] = firstNonEmpty(inviter.Email, inviter.Phone, "email unknown")
+		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, email) VALUES (?, 'share', ?, ?, ?)", hashed, user.UID, nid, addr)
+	default:
+		log.Printf("warn: cannot invite user[%s]. no usable contanct-addr found", user.UID)
+		return
+	}
+	if err != nil {
+		log.Printf("error: sendInvite failed at storing a token - aborting invite; err: %v", err)
+		return
+	}
+
+	// collect info about the shared note
+	note := NewNote("")
+	res = Resource{Kind: "note", ID: nid}
+	if err = store.Load(&res); err != nil {
+		log.Printf("error: sendInvite could not fetch note info of shared note; err: %v", err)
+	} else {
+		note = res.Value.(Note)
+	}
+	if len(note.Text) > 500 {
+		reqData["note_peek"] = string(note.Text)[:500]
+	} else {
+		reqData["note_peek"] = string(note.Text)
+	}
+	reqData["note_title"] = note.Title
+	reqData["num_peers"] = strconv.Itoa(len(note.Peers))
+	req := comm.NewRequest("invite", rcpt, reqData)
+	if err = store.commHandler(req); err != nil {
+		log.Printf("error: sendInvite could not forward request to comm.Handler; err: %v", err)
+	}
 }
 
 func generateNID() string {

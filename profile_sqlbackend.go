@@ -1,7 +1,10 @@
 package diffsync
 
 import (
+	"fmt"
 	"log"
+
+	"github.com/hiro/hync/comm"
 
 	"database/sql"
 )
@@ -88,7 +91,7 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, store *Store, ct
 			return err
 		}
 		if affected, _ := res.RowsAffected(); affected > 0 {
-			store.SendVerifyEmailToken(uid, patch.Value.(string))
+			go backend.sendVerifyToken(uid, emailRcpt(User{Email: patch.Value.(string)}), store)
 		}
 
 	case "set-tier":
@@ -113,6 +116,30 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, store *Store, ct
 func (backend ProfileSQLBackend) CreateEmpty(ctx context) (string, error) {
 	user, _, err := getOrCreateUser(User{createdForSID: ctx.sid}, backend.db)
 	return user.UID, err
+}
+
+func (backend ProfileSQLBackend) sendVerifyToken(uid string, rcpt comm.Rcpt, store *Store) {
+	addr, addrKind := rcpt.Addr()
+	switch addrKind {
+	case "email", "phone":
+	default:
+		// unsupported address kind, cannot create token
+		return
+	}
+	token, hashed := generateToken()
+	// WARNING: we're injecting a string into SQL without any escaping.
+	//          we need to assure that addrKind is a valid value (see switch above)
+	_, err := backend.db.Exec(fmt.Sprintf("INSERT INTO tokens (token, kind, uid, %s) VALUES (?, 'verify', ?, ?)", addrKind), hashed, uid, addr)
+	if err != nil {
+		// could not create token oO
+		return
+	}
+	err = store.commHandler(comm.NewRequest("verify", rcpt, map[string]string{
+		"token": token,
+	}))
+	if err != nil {
+		log.Printf("error: could not send out verify-token (type %s) to address `%s`; err: %s", addrKind, addr, err)
+	}
 }
 
 func getOrCreateUser(userRef User, db *sql.DB) (user User, created bool, err error) {
