@@ -49,7 +49,7 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 	if err != nil {
 		return nil, err
 	}
-	sid := sid_generate()
+	sid := generateSID()
 	var profile Resource
 	switch token.Kind {
 	case "anon", "share-email", "share-phone", "share-url":

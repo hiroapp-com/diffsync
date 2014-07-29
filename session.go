@@ -5,7 +5,6 @@ import (
 	"log"
 	"time"
 
-	"crypto/rand"
 	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
@@ -459,27 +458,10 @@ func (err SessionIDInvalidErr) Error() string {
 	return fmt.Sprintf("invalid session-id: %s", err.sid)
 }
 
-func sid_generate() string {
-	uuid := make([]byte, 16)
-	if n, err := rand.Read(uuid); err != nil || n != len(uuid) {
-		panic(err)
-	}
-	// RFC 4122
-	uuid[8] = 0x80 // variant bits
-	uuid[4] = 0x40 // v4
-	return hex.EncodeToString(uuid)
+func generateSID() string {
+	return hex.EncodeToString(uuid())
 }
 
 func generateTag() string {
 	return randomString(5)
-}
-
-func randomString(l int) string {
-	const src = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-	var bytes = make([]byte, l)
-	rand.Read(bytes)
-	for i, b := range bytes {
-		bytes[i] = src[b%byte(len(src))]
-	}
-	return string(bytes)
 }
