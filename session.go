@@ -187,7 +187,7 @@ func (sess *Session) handle_sync(event Event) {
 	// ACK'ing a client's sync-SYN
 
 	// calculate changes and add them to pending and incease our SV
-	shadow.UpdatePending(event.ctx.store)
+	shadow.UpdatePending(true, event.ctx.store)
 	event.Changes = shadow.pending
 	if !sess.push_client(event) {
 		// edge-case happened: client sent request and disconnected before we
@@ -280,8 +280,7 @@ func (sess *Session) flush(store *Store) {
 			sess.tagSent(res.StringRef())
 			continue
 		}
-		log.Printf("session[%s]: flushin' tainted resource: %s\n", sess.sid[:6], res)
-		modified := shadow.UpdatePending(store)
+		modified := shadow.UpdatePending(false, ctx.store)
 		if modified {
 			newTag := sess.createTag(res.StringRef())
 			event := Event{Name: "res-sync", Tag: newTag, SID: sess.sid, Res: res.Ref(), Changes: shadow.pending}

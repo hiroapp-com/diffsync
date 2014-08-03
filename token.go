@@ -13,7 +13,6 @@ import (
 	"database/sql"
 )
 
-
 type Token struct {
 	Key        string
 	Kind       string
@@ -46,6 +45,12 @@ func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
 		if err != nil {
 			return err
 		}
+		// save event.SID in context (if any was sent)
+		if event.SID != "" {
+			event.ctx.sid = event.SID
+		} else {
+			event.ctx.sid = session.sid
+		}
 		event.ctx.uid = session.uid
 		event.SID = session.sid
 	case "token-consume":
@@ -53,6 +58,7 @@ func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
 		if err != nil {
 			return err
 		}
+		event.ctx.sid = session.sid
 		event.ctx.uid = session.uid
 		event.SID = session.sid
 	default:
@@ -61,6 +67,7 @@ func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
 			return err
 		}
 		event.ctx.uid = uid
+		event.ctx.sid = event.SID
 	}
 	return next.Handle(event)
 }
