@@ -171,7 +171,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if ctx.uid != patch.Path {
 			return fmt.Errorf("cannot set seen for user other than context user. %s != %s ", ctx.uid, patch.Path)
 		}
-		if err := backend.pokeTimers(nid, true, ctx); err != nil {
+		if err := backend.pokeTimers(nid, false, ctx); err != nil {
 			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
 		result.Taint(Resource{Kind: "note", ID: nid})
