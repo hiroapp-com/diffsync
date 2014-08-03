@@ -25,6 +25,21 @@ type Note struct {
 	CreatedBy    User      `json:"created_by"`
 }
 
+func (note Note) String() string {
+	peek := string(note.Text)
+	if len(peek) > 100 {
+		peek = peek[:100] + "..."
+	}
+	return fmt.Sprintf("<note title: %s, text:%s, token: %s, peers: %s, owner: %s, created: %s>",
+		note.Title,
+		peek,
+		note.SharingToken,
+		note.Peers,
+		note.CreatedBy,
+		note.CreatedAt,
+	)
+}
+
 type PeerList []Peer
 
 type Peer struct {
@@ -33,6 +48,16 @@ type Peer struct {
 	LastSeen       *UnixTime `json:"last_seen,omitempty"`
 	LastEdit       *UnixTime `json:"last_edit,omitempty"`
 	Role           string    `json:"role"`
+}
+
+func (p Peer) String() string {
+	return fmt.Sprintf("<peer uid: %s, role: %s, cursor: %d, seen: %s, edited: %s>",
+		p.User.UID,
+		p.Role,
+		p.CursorPosition,
+		p.LastSeen,
+		p.LastEdit,
+	)
 }
 
 type Timestamp struct {
@@ -46,6 +71,10 @@ type NoteDeltaElement struct {
 	Op    string      `json:"op"`
 	Path  string      `json:"path"`
 	Value interface{} `json:"value,omitempty"`
+}
+
+func (elem NoteDeltaElement) String() string {
+	return fmt.Sprintf("<delta op: %s, path: %s, val: %s>", elem.Op, elem.Path, elem.Value)
 }
 
 func NewNote(text string) Note {
@@ -122,10 +151,6 @@ func (note Note) Empty() ResourceValue {
 	return NewNote("")
 }
 
-func (note Note) String() string {
-	return fmt.Sprintf("%#v", note)
-}
-
 func (note Note) GetDelta(latest ResourceValue) Delta {
 	master := latest.(Note)
 	delta := NoteDelta{}
@@ -172,7 +197,7 @@ func (note Note) GetDelta(latest ResourceValue) Delta {
 			}
 		}
 		if master.Peers[i].User.Phone != "" {
-			if idx, ok := oldDangling.indexFromPath("phone:" + master.Peers[i].User.Email); ok {
+			if idx, ok := oldDangling.indexFromPath("phone:" + master.Peers[i].User.Phone); ok {
 				// found current master-entry in old, dangling entries in the comparee.
 				delta = append(delta, NoteDeltaElement{"swap-user", oldDangling[idx].User.pathRef("peers"), master.Peers[i].User})
 				oldDangling[idx].User = master.Peers[i].User

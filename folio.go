@@ -1,7 +1,7 @@
 package diffsync
 
 import (
-	"log"
+	"fmt"
 	"strings"
 
 	"encoding/json"
@@ -17,6 +17,10 @@ type FolioChange struct {
 	Op    string      `json:"op"`
 	Path  string      `json:"path"`
 	Value interface{} `json:"value,omitempty"`
+}
+
+func (change *FolioChange) String() string {
+	return fmt.Sprintf("<delta op: %s, path: %s, val: %s", change.Op, change.Path, change.Value)
 }
 
 type Folio []NoteRef
@@ -62,7 +66,6 @@ func (d FolioDelta) HasChanges() bool {
 }
 
 func (delta FolioDelta) Apply(to ResourceValue) (ResourceValue, []Patch, error) {
-	log.Printf("received Folio-Delta: %#v", delta)
 	patches := make([]Patch, 0, len(delta))
 	folio := to.Clone().(Folio)
 	for _, change := range delta {
@@ -168,7 +171,7 @@ func (folio Folio) GetDelta(latest ResourceValue) Delta {
 }
 
 func (folio Folio) String() string {
-	s, _ := json.MarshalIndent(folio, "", "  ")
+	s, _ := json.Marshal(folio)
 	return string(s)
 }
 

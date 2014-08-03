@@ -23,6 +23,10 @@ type Resource struct {
 	Value ResourceValue `json:"val,omitempty"`
 }
 
+func (res *Resource) SameRef(other Resource) bool {
+	return res.Kind == other.Kind && res.ID == other.ID
+}
+
 func NewResource(kind, id string) Resource {
 	return Resource{Kind: kind, ID: id}
 }

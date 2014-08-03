@@ -2,6 +2,7 @@ package diffsync
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 )
 
@@ -15,6 +16,10 @@ type Shadow struct {
 type Edit struct {
 	Clock SessionClock `json:"clock"`
 	Delta Delta        `json:"delta"`
+}
+
+func (e Edit) String() string {
+	return fmt.Sprintf("<edit cv/sv: %d/%d, delta: %s>", e.Clock.CV, e.Clock.SV, e.Delta)
 }
 
 func NewShadow(res Resource) *Shadow {
@@ -33,18 +38,18 @@ func (shadow *Shadow) Rollback() {
 
 func (shadow *Shadow) UpdatePending(store *Store) bool {
 	res := shadow.res.Ref()
-	log.Printf("shadow[%s:%p]: calculating new delta and upate pending-queue\n", res.StringRef(), &res)
+	log.Printf("shadow[%s]: calculating new delta and upate pending-queue\n", res.StringRef())
 	if err := store.Load(&res); err != nil {
-		log.Printf("shadow[%s:%p]: error - could not load master-version for update. err: %s", res.StringRef(), &res, err)
+		log.Printf("shadow[%s]: error - could not load master-version for update. err: %s", res.StringRef(), err)
 	}
-	log.Printf("shadow[%s:%p]: current mastertext: `%s`\n", res.StringRef(), &res, res.Value)
-	log.Printf("shadow[%s:%p]: current shadowtext: `%s`\n", shadow.res.StringRef(), &shadow.res, shadow.res.Value)
+	log.Printf("shadow[%s]: current mastertext: `%s`\n", res.StringRef(), res.Value)
+	log.Printf("shadow[%s]: current shadowtext: `%s`\n", shadow.res.StringRef(), shadow.res.Value)
 	delta := shadow.res.Value.GetDelta(res.Value)
-	log.Printf("shadow[%s:%p]: found delta: `%s`\n", res.StringRef(), &res, delta)
-	shadow.pending = append(shadow.pending, Edit{shadow.SessionClock.Clone(), delta})
+	log.Printf("shadow[%s]: found delta: `%s`\n", res.StringRef(), delta)
 	if !delta.HasChanges() {
 		return false
 	}
+	shadow.pending = append(shadow.pending, Edit{shadow.SessionClock.Clone(), delta})
 	shadow.res = res
 	shadow.IncSv()
 	return true
@@ -52,7 +57,7 @@ func (shadow *Shadow) UpdatePending(store *Store) bool {
 
 func (shadow *Shadow) SyncIncoming(edit Edit, store *Store, ctx context) (err error) {
 	// Make sure clocks are in sync or recoverable
-	log.Printf("shadow[%s:%p]: sync incoming edit: `%v`\n", shadow.res.StringRef(), &shadow.res, edit)
+	log.Printf("shadow[%s]: sync incoming edit: `%v`\n", shadow.res.StringRef(), edit)
 	if err := shadow.SessionClock.SyncSvWith(edit.Clock, shadow); err != nil {
 		return err
 	}
@@ -72,6 +77,7 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store, ctx context) (err er
 	if !edit.Delta.HasChanges() {
 		return nil
 	}
+	log.Printf("received delta: %s", edit.Delta)
 	newres, patches, err := edit.Delta.Apply(shadow.res.Value)
 	if err != nil {
 		return err
@@ -81,7 +87,8 @@ func (shadow *Shadow) SyncIncoming(edit Edit, store *Store, ctx context) (err er
 	shadow.IncCv()
 	// send patches to store
 	for i := range patches {
-		err := store.Patch(shadow.res.Ref(), patches[i], ctx)
+		log.Printf("found patch: %s", patches[i])
+		err := ctx.store.Patch(shadow.res.Ref(), patches[i], result, ctx)
 		if err != nil {
 			return err
 		}

@@ -121,7 +121,16 @@ func (prof Profile) Clone() ResourceValue {
 }
 
 func (prof Profile) String() string {
-	return fmt.Sprintf("%#v", prof)
+	return fmt.Sprintf("<profile uid: %s, email: %s/%s, phone: %s/%s, name: %s, signup: %s, contacts: %s",
+		prof.User.UID,
+		prof.User.Email,
+		prof.User.EmailStatus,
+		prof.User.Phone,
+		prof.User.PhoneStatus,
+		prof.User.Name,
+		prof.User.SignupAt,
+		prof.Contacts,
+	)
 }
 
 type ProfileDelta []UserChange
@@ -129,6 +138,10 @@ type UserChange struct {
 	Op    string      `json:"op"`
 	Path  string      `json:"path"`
 	Value interface{} `json:"value,omitempty"`
+}
+
+func (change UserChange) String() string {
+	return fmt.Sprintf("<delta op: %s, path: %s, val: %s", change.Op, change.Path, change.Value)
 }
 
 func (prof Profile) GetDelta(latest ResourceValue) Delta {
@@ -254,6 +267,18 @@ func (delta ProfileDelta) Apply(to ResourceValue) (ResourceValue, []Patch, error
 			}
 			patches = append(patches, Patch{Op: "set-name", Value: newName, OldValue: newres.User.Name})
 			newres.User.Name = newName
+		case "set-email":
+			if !strings.HasPrefix(diff.Path, "user/") {
+				// cannot change name of anyone but own user for now
+				continue
+			}
+			newEmail, ok := diff.Value.(string)
+			if !ok {
+				// wut not a string? ABORT
+				continue
+			}
+			patches = append(patches, Patch{Op: "set-email", Path: "user/", Value: newEmail, OldValue: newres.User.Email})
+			newres.User.Email = newEmail
 		}
 	}
 	return newres, patches, nil

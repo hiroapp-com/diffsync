@@ -39,19 +39,22 @@ func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 	note.CreatedAt = UnixTime(createdAt)
 	note.CreatedBy = User{UID: createdBy}
 	peers := PeerList{}
-	rows, err := backend.db.Query("SELECT nr.uid, users.email, nr.cursor_pos, nr.last_seen, nr.last_edit, nr.role FROM noterefs as nr LEFT OUTER JOIN users ON (users.uid = nr.uid and users.email_status in ('verified', 'invited')) WHERE nid = ?", key)
+	rows, err := backend.db.Query("SELECT nr.uid, users.email, u2.phone, nr.cursor_pos, nr.last_seen, nr.last_edit, nr.role FROM noterefs as nr LEFT OUTER JOIN users ON (users.uid = nr.uid and users.email_status in ('verified', 'invited')) LEFT OUTER JOIN users as u2 ON (u2.uid = nr.uid and u2.phone_status in ('verified', 'invited')) WHERE nid = ?", key)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		peer := Peer{User: User{}}
-		var email sql.NullString
-		if err := rows.Scan(&peer.User.UID, &email, &peer.CursorPosition, &peer.LastSeen, &peer.LastEdit, &peer.Role); err != nil {
+		var email, phone sql.NullString
+		if err := rows.Scan(&peer.User.UID, &email, &phone, &peer.CursorPosition, &peer.LastSeen, &peer.LastEdit, &peer.Role); err != nil {
 			return nil, err
 		}
 		if email.Valid {
 			peer.User.Email = email.String
+		}
+		if phone.Valid {
+			peer.User.Phone = phone.String
 		}
 		peers = append(peers, peer)
 	}
