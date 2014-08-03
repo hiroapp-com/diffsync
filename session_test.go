@@ -22,6 +22,47 @@ type SessionTests struct {
 	comm chan comm.Request
 }
 
+type Client struct {
+	resp    chan Event
+	session *Session
+}
+
+func NewClient() Client {
+	return Client{resp: make(chan Event, 16)}
+}
+
+func (client Client) ctx() Context {
+	var uid, sid string
+	if client.session != nil {
+		sid = client.session.sid
+		uid = client.session.uid
+	}
+	return Context{sid: sid, uid: uid, Client: client}
+}
+
+func (client Client) awaitResponse() (Event, error) {
+	select {
+	case event := <-client.resp:
+		return event, nil
+	case <-time.After(3 * time.Second):
+		return Event{}, fmt.Errorf("client response timed out")
+	}
+	return Event{}, fmt.Errorf("(not so) unreachable?!")
+}
+
+func (client Client) Handle(event Event) error {
+	if client.session != nil && client.session.sid != event.SID {
+		fmt.Println(event.SID, client.session.sid, event)
+		panic("client: SID MISMATCH")
+	}
+	select {
+	case client.resp <- event:
+	default:
+		return fmt.Errorf("cannot send event to client")
+	}
+	return nil
+}
+
 func (suite *SessionTests) SetupTest() {
 	suite.dbPath = fmt.Sprintf("./hiro-test-%s.db", randomString(4))
 	db, err := sql.Open("sqlite3", suite.dbPath)
@@ -32,10 +73,11 @@ func (suite *SessionTests) SetupTest() {
 		suite.T().Fatal("cannot reset db")
 	}
 	suite.comm = make(chan comm.Request, 1)
-	suite.srv, err = NewServer(db, func(req comm.Request) error {
+	commHandler := func(req comm.Request) error {
 		suite.comm <- req
 		return nil
-	})
+	}
+	suite.srv, err = NewServer(db, commHandler)
 	if err != nil {
 		suite.T().Fatal("cannot spawn server", err)
 	}
@@ -49,39 +91,53 @@ func (suite *SessionTests) TearDownTest() {
 	os.Remove(suite.dbPath)
 }
 
-func (suite *SessionTests) anonSession() (*Session, *Conn) {
-	conn := suite.srv.NewConn()
+func (suite *SessionTests) sessionCreate(token string) Client {
+	client := NewClient()
+	err := suite.srv.Handle(Event{Name: "session-create", Token: token, ctx: client.ctx()})
+	suite.NoError(err, "session-create request failed")
+	resp, err := client.awaitResponse()
+	suite.NoError(err, "session-create response failed")
+	client.session = resp.Session
+	return client
+}
+func (suite *SessionTests) anonSession() Client {
 	token, err := suite.srv.anonToken()
 	suite.Nil(err, "could not get anon token")
-	conn.ClientEvent(Event{Name: "session-create", Token: token})
-	resp := suite.awaitResponse(conn.ToClient(), "session-create response did not arrive")
-	return resp.Session, conn
+	return suite.sessionCreate(token)
 }
 
-func (suite *SessionTests) loginUser(user User) (*Session, *Conn) {
+func (suite *SessionTests) loginUser(user User) Client {
 	token, err := suite.srv.loginToken(user.UID)
 	suite.NoError(err, "cannot create login token")
-	conn := suite.srv.NewConn()
-	conn.ClientEvent(Event{Name: "session-create", Token: token})
-	resp := suite.awaitResponse(conn.ToClient(), "session-create response did not arrive")
-	return resp.Session, conn
+	client := NewClient()
+	err = suite.srv.Handle(Event{Name: "session-create", Token: token, ctx: client.ctx()})
+	suite.NoError(err, "session-create request failed")
+	resp, err := client.awaitResponse()
+	suite.NoError(err, "session-create response failed")
+	client.session = resp.Session
+	return client
 }
 
 func (suite *SessionTests) createUserWith2Notes(name string) User {
 	store := suite.srv.Store
-	ctx := context{uid: "sys"}
+	ctx := Context{uid: "sys"}
 	res, err := store.NewResource("profile", ctx)
 	if !suite.NoError(err, "cannot create new profile") {
 		suite.T().Fatal("cannot create user")
 	}
 	user := res.Value.(Profile).User
-	err = store.Patch(res, Patch{"set-tier", "user/", int64(1), int64(0)}, ctx)
+	result := SyncResult{}
+	err = store.Patch(res, Patch{"set-tier", "user/", int64(1), int64(0)}, &result, ctx)
 	suite.NoError(err, "cannot lift users tier")
-	err = store.Patch(res, Patch{"set-name", "user/", name, ""}, ctx)
+	suite.Equal(1, len(result.tainted), "set-tier did not taint profile")
+	// reset result
+	result = SyncResult{}
+	err = store.Patch(res, Patch{"set-name", "user/", name, ""}, &result, ctx)
 	suite.NoError(err, "cannot users name")
-	_, err = store.NewResource("note", context{uid: user.UID})
+	suite.Equal(1, len(result.tainted), "set-name did not taint profile")
+	_, err = store.NewResource("note", Context{uid: user.UID})
 	suite.NoError(err, "cannot create first note")
-	_, err = store.NewResource("note", context{uid: user.UID})
+	_, err = store.NewResource("note", Context{uid: user.UID})
 	suite.NoError(err, "cannot create second note")
 	return user
 }
@@ -96,74 +152,77 @@ func (suite *SessionTests) awaitResponse(ch <-chan Event, timeoutMsg string) Eve
 	return Event{}
 }
 
-func (suite *SessionTests) awaitAddPeer(sess *Session, conn *Conn, peerUID string, shared Resource) {
+func (suite *SessionTests) awaitAddPeer(client Client, peerUID string, shared Resource) {
 	// see if sessA got hold of the new peer
-	peersEvent := suite.awaitResponse(conn.ToClient(), "inviter did not get peers update")
-	suite.Equal("res-sync", peersEvent.Name, "got unexpected event-name from connection")
-	suite.Equal("note", peersEvent.Res.Kind, "expected a note-sync")
-	suite.Equal(shared.ID, peersEvent.Res.ID, "note-id mismatch")
-	if suite.Equal(1, len(peersEvent.Changes), "wrong number of changes") {
-		// see if we got the peers update from sessB
-		deltas := peersEvent.Changes[0].Delta.(NoteDelta)
-		suite.Equal(1, len(deltas), "wrong number of changes")
-		suite.Equal("add-peer", deltas[0].Op, "wrong delta.Op")
-		suite.Equal(peerUID, deltas[0].Value.(Peer).User.UID, "wrong peer UID")
-		suite.Equal("active", deltas[0].Value.(Peer).Role, "wrong peer UID")
+	peersEvent, err := client.awaitResponse()
+	log.Println("TESTETSTEST, (expected peers) event", peersEvent)
+	if suite.NoError(err, "inviter didnot receive add-peers event") {
+		suite.Equal("res-sync", peersEvent.Name, "got unexpected event-name from connection")
+		suite.Equal("note", peersEvent.Res.Kind, "expected a note-sync")
+		suite.Equal(shared.ID, peersEvent.Res.ID, "note-id mismatch")
+		// expecting 1 or 2 changes is due to th fact, that a possible (email/phone)
+		// addNote during withSharingToken left some yet un-acked changes the
+		// server sent himself in an ACK. this is normal behaviour, the client
+		// will just ignore the first change by its cv/sv
+		if suite.Equal(true, 0 < len(peersEvent.Changes), "wrong number of changes") {
+			// check the last delta
+			deltas := peersEvent.Changes[len(peersEvent.Changes)-1].Delta.(NoteDelta)
+			suite.Equal(1, len(deltas), "wrong number of changes")
+			suite.Equal("add-peer", deltas[0].Op, "wrong delta.Op")
+			suite.Equal(peerUID, deltas[0].Value.(Peer).User.UID, "wrong peer UID")
+			suite.Equal("active", deltas[0].Value.(Peer).Role, "wrong peer UID")
+		}
 	}
 }
 
 func (suite *SessionTests) TestVisitorWithAnonToken() {
 	// first spawn an anon session that creates the shared token
-	conn := suite.srv.NewConn()
 	token, err := suite.srv.anonToken()
 	suite.Nil(err, "could not get anon token")
-	conn.ClientEvent(Event{Name: "session-create", Token: token})
-	resp := suite.awaitResponse(conn.ToClient(), "session-create response did not arrive")
+	client := NewClient()
+	err = suite.srv.Handle(Event{Name: "session-create", Token: token, ctx: client.ctx()})
+	suite.NoError(err, "session create with anon token failed (request)")
+	resp, err := client.awaitResponse()
+	suite.NoError(err, "session create with anon token failed (response)")
 
 	suite.NotEqual("", resp.SID, "sid missing in response")
 	suite.Equal(token, resp.Token, "response contains wrong token should be `%s`, but was `%s`", token, resp.Token)
-	if !suite.NotNil(resp.Session, "session missing in response") {
-		// test does not make much more sense from here on, thus abort it
-		suite.T().Fatal("session missing in response")
+	if suite.NotNil(resp.Session, "session missing in response") {
+		sess := resp.Session
+		suite.Equal(resp.SID, sess.sid, "sid mismatch between event.SID and event.Session.SID")
+		suite.NotEmpty(sess.uid, "uid missing in resp.Session")
+		suite.Equal(2, len(sess.shadows), "session should contain exactly 2 shadow (profile and folio)")
 
-	}
-	suite.Equal(resp.SID, resp.Session.sid, "sid mismatch between event.SID and event.Session.SID")
-	suite.NotEmpty(resp.Session.uid, "uid missing in resp.Session")
-	suite.Equal(2, len(resp.Session.shadows), "session should contain exactly 2 shadow (profile and folio). response-session contained %d", len(resp.Session.shadows))
-
-	shadow := extractShadow(resp.Session, "profile")
-	if suite.NotNil(shadow, "returned session did not contain a profile shadow") {
-		suite.NotEmpty(shadow.res.ID, "profile-shadow is missing Resource-ID")
-		suite.IsType(Profile{}, shadow.res.Value, "Value in profile shadow's resource is not a Profile")
-		profile := shadow.res.Value.(Profile)
-		suite.Equal(resp.Session.uid, profile.User.UID, "the returned profile shadow has the wrong uid")
-	}
-	shadow = extractShadow(resp.Session, "folio")
-	if suite.NotNil(shadow, "returned session did not contain a folio shadow") {
-		suite.NotEmpty(shadow.res.ID, "first (and only) shadow has empty ID")
-		suite.IsType(Folio{}, shadow.res.Value, "expected folio-shadow's resource did not contain a valid Folio value")
-		folio := shadow.res.Value.(Folio)
-		suite.Equal(0, len(folio), "folio with 0 notes expected, but contains `%d`", len(folio))
+		shadow := extractShadow(sess, "profile")
+		if suite.NotNil(shadow, "returned session did not contain a profile shadow") {
+			suite.NotEmpty(shadow.res.ID, "profile-shadow is missing Resource-ID")
+			suite.IsType(Profile{}, shadow.res.Value, "Value in profile shadow's resource is not a Profile")
+			profile := shadow.res.Value.(Profile)
+			suite.Equal(sess.uid, profile.User.UID, "the returned profile shadow has the wrong uid")
+		}
+		shadow = extractShadow(sess, "folio")
+		if suite.NotNil(shadow, "returned session did not contain a folio shadow") {
+			suite.NotEmpty(shadow.res.ID, "first (and only) shadow has empty ID")
+			suite.IsType(Folio{}, shadow.res.Value, "expected folio-shadow's resource did not contain a valid Folio value")
+			folio := shadow.res.Value.(Folio)
+			suite.Equal(0, len(folio), "folio with 0 notes expected, but contains `%d`", len(folio))
+		}
 	}
 }
 
 func (suite *SessionTests) TestVisitorWithURLShareToken() {
 	// first spawn an anon session that creates the shared token
-	sessA, connA := suite.anonSession()
+	clientA := suite.anonSession()
 	// create new note
-	noteRes := suite.addNote(sessA, connA)
+	noteRes := suite.addNote(clientA)
 	if !suite.NotEqual(Resource{}, noteRes) {
 		suite.T().Fatal("could not add resource")
 	}
 	note := noteRes.Value.(Note)
-	suite.NotEmpty(note.SharingToken, "sharingtoken missing in newly created note")
-
 	// now create new anon user to create a sessin using the sharing token
-	connB := suite.srv.NewConn()
-	connB.ClientEvent(Event{Name: "session-create", Token: note.SharingToken})
-	resp := suite.awaitResponse(connB.ToClient(), "session-create response did not arrive")
-	sessB := resp.Session
+	clientB := suite.sessionCreate(note.SharingToken)
 	// now check if sessB has all it should have
+	sessB := clientB.session
 	suite.Equal(3, len(sessB.shadows), "anon user should have 3 shadows (profile, folio, note), but has %d", len(sessB.shadows))
 	shadow := extractShadow(sessB, "folio")
 	if suite.NotNil(shadow, "returned session did not contain a folio shadow") {
@@ -176,13 +235,11 @@ func (suite *SessionTests) TestVisitorWithURLShareToken() {
 
 func (suite *SessionTests) TestVisitorWithEmailShareToken() {
 	user := suite.createUserWith2Notes("inviter")
-	sessA, connA := suite.loginUser(user)
-	suite.withShareToken("email", sessA, connA, func(shareToken string, shared Resource) {
+	clientA := suite.loginUser(user)
+	suite.withShareToken("email", clientA, func(shareToken string, shared Resource) {
 		// now use the token to create a new anon-user
-		connB := suite.srv.NewConn()
-		connB.ClientEvent(Event{Name: "session-create", Token: shareToken})
-		resp := suite.awaitResponse(connB.ToClient(), "session-create response (of invitee) did not arrive")
-		sessB := resp.Session
+		clientB := suite.sessionCreate(shareToken)
+		sessB := clientB.session
 		// now check if sessB has all it should have
 		suite.Equal(3, len(sessB.shadows), "anon user should have 3 shadows (profile, folio, note)")
 		shadow := extractShadow(sessB, "folio")
@@ -197,13 +254,11 @@ func (suite *SessionTests) TestVisitorWithEmailShareToken() {
 
 func (suite *SessionTests) TestVisitorWithPhoneShareToken() {
 	user := suite.createUserWith2Notes("inviter")
-	sessA, connA := suite.loginUser(user)
-	suite.withShareToken("phone", sessA, connA, func(shareToken string, shared Resource) {
+	clientA := suite.loginUser(user)
+	suite.withShareToken("phone", clientA, func(shareToken string, shared Resource) {
 		// now use the token to create a new anon-user
-		connB := suite.srv.NewConn()
-		connB.ClientEvent(Event{Name: "session-create", Token: shareToken})
-		resp := suite.awaitResponse(connB.ToClient(), "session-create response (of invitee) did not arrive")
-		sessB := resp.Session
+		clientB := suite.sessionCreate(shareToken)
+		sessB := clientB.session
 		// now check if sessB has all it should have
 		suite.Equal(3, len(sessB.shadows), "anon user should have 3 shadows (profile, folio, note), but has %d", len(sessB.shadows))
 		shadow := extractShadow(sessB, "folio")
@@ -218,27 +273,41 @@ func (suite *SessionTests) TestVisitorWithPhoneShareToken() {
 
 func (suite *SessionTests) TestVisitorWithLoginToken() {
 	user := suite.createUserWith2Notes("test")
-	sessA, _ := suite.loginUser(user)
+	clientA := suite.loginUser(user)
 
 	// check if returned session has user.UID
-	shadow := extractShadow(sessA, "profile")
-	if suite.NotNil(shadow, "returned session did not contain a profile shadow") {
+	shadow := extractShadow(clientA.session, "profile")
+	if suite.NotNil(shadow, "profile shaddow missing in session") {
 		profile := shadow.res.Value.(Profile)
-		suite.Equal(user.UID, profile.User.UID, "new session's profile-user has wrong UID. expected `%s`, got `%s`", user.UID, profile.User.UID)
+		suite.Equal(user.UID, profile.User.UID, "new session's profile-user has wrong UID")
 		suite.Equal(1, profile.User.Tier, "new session's user is not signed up")
 	}
 	// check if flio contains 2 notes
-	shadow = extractShadow(sessA, "folio")
-	if suite.NotNil(shadow, "returned session did not contain a folio shadow") {
+	shadow = extractShadow(clientA.session, "folio")
+	if suite.NotNil(shadow, "folio shadow missing in session") {
 		folio := shadow.res.Value.(Folio)
-		suite.Equal(2, len(folio), "folio has the wrong number of notes. expected 2, got %s", len(folio))
+		suite.Equal(2, len(folio), "folio has the wrong number of notes")
 	}
 }
 
 func (suite *SessionTests) TestVisitorWithVerifyEmailToken() {
 	// first spawn an anon session that creates the shared token
 	user := suite.createUserWith2Notes("test")
-	suite.srv.Store.Patch(Resource{Kind: "profile", ID: user.UID}, Patch{"set-email", "user/", "test@hiroapp.com", ""}, context{uid: user.UID})
+	clientA := suite.loginUser(user)
+	err := suite.srv.Handle(Event{
+		Name: "res-sync",
+		SID:  clientA.session.sid,
+		Tag:  "test",
+		Res:  Resource{Kind: "profile", ID: user.UID},
+		Changes: []Edit{{
+			Clock: SessionClock{0, 0, 0},
+			Delta: ProfileDelta{
+				UserChange{Op: "set-email", Path: "user/", Value: "test@hiroapp.com"},
+			},
+		}},
+		ctx: clientA.ctx(),
+	})
+	suite.NoError(err, "cannot set email")
 	// check for verification-req
 	var req comm.Request
 	select {
@@ -250,10 +319,8 @@ func (suite *SessionTests) TestVisitorWithVerifyEmailToken() {
 	suite.Equal("verify", req.Kind, "comm.Request has wrong kind. expected `verify`, but got `%s`", req, req.Kind)
 	if suite.NotEmpty(req.Data["token"], "Token missing in comm.Request atfer invite") {
 		// now use the token to create a new anon-user
-		connA := suite.srv.NewConn()
-		connA.ClientEvent(Event{Name: "session-create", Token: req.Data["token"]})
-		resp := suite.awaitResponse(connA.ToClient(), "session-create response (of invitee) did not arrive")
-		sessA := resp.Session
+		clientB := suite.sessionCreate(req.Data["token"])
+		sessA := clientB.session
 		// now check if sessB has all it should have
 		suite.Equal(4, len(sessA.shadows), "verify user should have 4 shadows (profile, folio, 2*note), but has %d", len(sessA.shadows))
 		shadow := extractShadow(sessA, "folio")
@@ -278,16 +345,18 @@ func (suite *SessionTests) TestVisitorWithVerifyEmailToken() {
 }
 
 func (suite *SessionTests) TestAnonConsumeURLShare() {
-	sessA, connA := suite.anonSession()
-	suite.withShareToken("url", sessA, connA, func(shareToken string, shared Resource) {
+	clientA := suite.anonSession()
+	suite.withShareToken("url", clientA, func(shareToken string, shared Resource) {
 		// now use the token to create a new anon-user
-		sessB, connB := suite.anonSession()
-		suite.addNote(sessB, connB)
-		connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: shareToken})
+		clientB := suite.anonSession()
+		suite.addNote(clientB)
+		suite.srv.Handle(Event{SID: clientB.session.sid, Name: "token-consume", Token: shareToken})
 		// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
 		responses := [3]Event{}
+		var err error
 		for i := 0; i < 3; i++ {
-			responses[i] = suite.awaitResponse(connB.ToClient(), "no response from connection")
+			responses[i], err = clientB.awaitResponse()
+			suite.NoError(err, "token-consume response missing")
 		}
 		var found int
 		for _, resp := range responses {
@@ -326,8 +395,8 @@ func (suite *SessionTests) TestAnonConsumeURLShare() {
 
 }
 
-func (suite *SessionTests) withShareToken(kind string, sess *Session, conn *Conn, fn func(string, Resource)) {
-	sharedRes := suite.addNote(sess, conn)
+func (suite *SessionTests) withShareToken(kind string, client Client, fn func(string, Resource)) {
+	sharedRes := suite.addNote(client)
 	if !suite.NotEqual(Resource{}, sharedRes) {
 		suite.T().Fatal("could not add resource")
 	}
@@ -344,30 +413,53 @@ func (suite *SessionTests) withShareToken(kind string, sess *Session, conn *Conn
 	case "phone":
 		invitee = User{Phone: "+100012345"}
 	}
-	err := suite.srv.Store.Patch(sharedRes, Patch{"invite-user", "", invitee, nil}, context{uid: sess.uid, ts: time.Now()})
+	err := suite.srv.Handle(Event{
+		Name: "res-sync",
+		SID:  client.session.sid,
+		Tag:  "test",
+		Res:  sharedRes,
+		Changes: []Edit{{
+			Clock: SessionClock{0, 1, 0},
+			Delta: NoteDelta{
+				NoteDeltaElement{Op: "invite", Path: "peers/", Value: invitee},
+			},
+		}},
+		ctx: client.ctx(),
+	})
 	if suite.NoError(err, "could not invite user") {
-		event := suite.awaitResponse(conn.ToClient(), "inviter did not get profile update (add contact) after share")
-		suite.Equal("res-sync", event.Name, "got unexpected event-name from connection")
-		suite.Equal("profile", event.Res.Kind, "expected a profile-sync")
-		suite.Equal(sess.uid, event.Res.ID, "profile-id mismatch")
-		if suite.Equal(1, len(event.Changes), "wrong number of changes") {
-			// ACK the sync
-			event.Changes[0].Clock.SV++
-			event.Changes[0].Delta = ProfileDelta{}
-			conn.ClientEvent(event)
-		}
-		// no await the note update (add-peer)
-		event = suite.awaitResponse(conn.ToClient(), "inviter did not get note update (add peer) after share")
+		// check note update (swap user)
+		event, err := client.awaitResponse()
+		suite.NoError(err, "inviter did not get note update (add peer) after share")
 		suite.Equal("res-sync", event.Name, "got unexpected event-name from connection")
 		suite.Equal("note", event.Res.Kind, "expected a note-sync")
 		suite.Equal(sharedRes.ID, event.Res.ID, "note-id mismatch")
 		if suite.Equal(1, len(event.Changes), "wrong number of changes") {
-			if suite.Equal("add-peer", event.Changes[0].Delta.(NoteDelta)[0].Op, "unexpected note-delta") {
-				// ACK the sync
-				event.Changes[0].Clock.SV++
-				event.Changes[0].Delta = NoteDelta{}
-				conn.ClientEvent(event)
+			// expect swap-user and change-role changes
+			if suite.Equal(2, len(event.Changes[0].Delta.(NoteDelta)), "wrong number of deltas") {
+				suite.Equal("swap-user", event.Changes[0].Delta.(NoteDelta)[0].Op, "unexpected note-delta")
+				suite.Equal("change-role", event.Changes[0].Delta.(NoteDelta)[1].Op, "unexpected note-delta")
 			}
+			// ACK the sync
+			//event.Changes[0].Clock.SV++
+			//event.Changes[0].Delta = NoteDelta{}
+			//err = suite.srv.Handle(event)
+			//suite.NoError(err, "cannot ack add-peer")
+		}
+
+		// wait for the folio-change (add contact)
+		event, err = client.awaitResponse()
+		suite.NoError(err, "invite user response missing after")
+		suite.Equal("res-sync", event.Name, "got unexpected event-name from connection")
+		suite.Equal("profile", event.Res.Kind, "expected a profile-sync")
+		suite.Equal(client.session.uid, event.Res.ID, "profile-id mismatch")
+		// one 'add-user' delta expected
+		if suite.Equal(1, len(event.Changes), "wrong number of changes") {
+			suite.Equal("add-user", event.Changes[0].Delta.(ProfileDelta)[0].Op, "unexpected delta op")
+			suite.Equal("contacts/", event.Changes[0].Delta.(ProfileDelta)[0].Path, "unexpected delta path")
+			// ACK the sync
+			event.Changes[0].Clock.SV++
+			event.Changes[0].Delta = ProfileDelta{}
+			suite.srv.Handle(event)
 		}
 
 		var req comm.Request
@@ -385,17 +477,21 @@ func (suite *SessionTests) withShareToken(kind string, sess *Session, conn *Conn
 
 func (suite *SessionTests) TestAnonConsumeEmailShare() {
 	user := suite.createUserWith2Notes("inviter")
-	sessA, connA := suite.loginUser(user)
+	clientA := suite.loginUser(user)
 	// create new note
-	suite.withShareToken("email", sessA, connA, func(token string, shared Resource) {
+	suite.withShareToken("email", clientA, func(token string, shared Resource) {
 		// now use the token to create a new anon-user
-		sessB, connB := suite.anonSession()
-		suite.addNote(sessB, connB)
-		connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: token})
+		clientB := suite.anonSession()
+		suite.addNote(clientB)
+		err := suite.srv.Handle(Event{SID: clientB.session.sid, Name: "token-consume", Token: token, ctx: clientB.ctx()})
+		suite.NoError(err, "error sending token-consume request")
 		// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
 		responses := [3]Event{}
 		for i := 0; i < 3; i++ {
-			responses[i] = suite.awaitResponse(connB.ToClient(), "no response from connection")
+			responses[i], err = clientB.awaitResponse()
+			if !suite.NoError(err, "%d response(s) missing after token-consume", 3-i) {
+				break
+			}
 		}
 		var found int
 		for _, resp := range responses {
@@ -414,10 +510,10 @@ func (suite *SessionTests) TestAnonConsumeEmailShare() {
 					// sent to this session was never acked (b.c. it was sent with an ACK).
 					// thus, the server will include the original "set-nid" change along with
 					// the actual new-note change
-					if suite.Equal(2, len(resp.Changes), "wrong number of changes for folio. expected 2, got %v", resp.Changes) {
+					if suite.Equal(2, len(resp.Changes), "wrong number of changes for folio") {
 						if suite.Equal(1, len(resp.Changes[1].Delta.(FolioDelta)), "wrong number of changes for folio") {
 							delta := resp.Changes[1].Delta.(FolioDelta)
-							suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received, wanted a `add-noteref`, got `%s`", delta[0].Op)
+							suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received")
 							suite.Equal(shared.ID, delta[0].Value.(NoteRef).NID, "wrong nid received in folio-delta")
 						}
 					}
@@ -429,21 +525,26 @@ func (suite *SessionTests) TestAnonConsumeEmailShare() {
 		}
 		suite.Equal(3, found, "not all expected responses received")
 		// see if sessA got hold of the new peer
-		suite.awaitAddPeer(sessA, connA, sessB.uid, shared)
+		suite.awaitAddPeer(clientA, clientB.session.uid, shared)
 	})
 }
 func (suite *SessionTests) TestAnonConsumePhoneShare() {
 	user := suite.createUserWith2Notes("inviter")
-	sessA, connA := suite.loginUser(user)
-	suite.withShareToken("phone", sessA, connA, func(token string, shared Resource) {
+	clientA := suite.loginUser(user)
+	suite.withShareToken("phone", clientA, func(token string, shared Resource) {
 		// now use the token to create a new anon-user
-		sessB, connB := suite.anonSession()
-		suite.addNote(sessB, connB)
-		connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: token})
+		clientB := suite.anonSession()
+		suite.addNote(clientB)
+		err := suite.srv.Handle(Event{SID: clientB.session.sid, Name: "token-consume", Token: token, ctx: clientB.ctx()})
+		suite.NoError(err, "cannot consume token")
 		// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
 		responses := [3]Event{}
 		for i := 0; i < 3; i++ {
-			responses[i] = suite.awaitResponse(connB.ToClient(), "no response from connection")
+			responses[i], err = clientB.awaitResponse()
+			log.Println("RESSPONSES", responses[i])
+			if !suite.NoError(err, "%d missing responses", 3-i) {
+				break
+			}
 		}
 		var found int
 		for _, resp := range responses {
@@ -462,10 +563,10 @@ func (suite *SessionTests) TestAnonConsumePhoneShare() {
 					// sent to this session was never acked (b.c. it was sent with an ACK).
 					// thus, the server will include the original "set-nid" change along with
 					// the actual new-note change
-					if suite.Equal(2, len(resp.Changes), "wrong number of changes for folio. expected 2, got %v", resp.Changes) {
+					if suite.Equal(2, len(resp.Changes), "wrong number of changes for folio") {
 						if suite.Equal(1, len(resp.Changes[1].Delta.(FolioDelta)), "wrong number of changes for folio") {
 							delta := resp.Changes[1].Delta.(FolioDelta)
-							suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received, wanted a `add-noteref`, got `%s`", delta[0].Op)
+							suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received")
 							suite.Equal(shared.ID, delta[0].Value.(NoteRef).NID, "wrong nid received in folio-delta")
 						}
 					}
@@ -477,7 +578,7 @@ func (suite *SessionTests) TestAnonConsumePhoneShare() {
 		}
 		suite.Equal(3, found, "not all expected responses received")
 		// see if sessA got hold of the new peer
-		suite.awaitAddPeer(sessA, connA, sessB.uid, shared)
+		suite.awaitAddPeer(clientA, clientB.session.uid, shared)
 	})
 }
 
@@ -486,18 +587,18 @@ func (suite *SessionTests) TestAnonLogin() {
 	user := suite.createUserWith2Notes("test")
 	token, err := suite.srv.loginToken(user.UID)
 	suite.NoError(err, "cannot create login token")
-
-	sessA, connA := suite.anonSession()
+	clientA := suite.anonSession()
 	// create new note
-	res := suite.addNote(sessA, connA)
+	res := suite.addNote(clientA)
 	if !suite.NotEqual(Resource{}, res) {
 		suite.T().Fatal("could not add resource")
 	}
 
-	connA.ClientEvent(Event{Name: "session-create", Token: token, SID: sessA.sid})
-	resp := suite.awaitResponse(connA.ToClient(), "session-create response did not arrive")
+	suite.srv.Handle(Event{SID: clientA.session.sid, Name: "session-create", Token: token, ctx: clientA.ctx()})
+	resp, err := clientA.awaitResponse()
+	suite.NoError(err, "session-create response did not arrive")
 	// overwrite sessA with new session
-	sessA = resp.Session
+	sessA := resp.Session
 	suite.Equal(user.UID, sessA.uid)
 	suite.Equal(5, len(sessA.shadows), "incorrect number of shadows for new session")
 
@@ -512,14 +613,27 @@ func (suite *SessionTests) TestAnonLogin() {
 	shadow = extractShadow(sessA, "folio")
 	if suite.NotNil(shadow, "returned session did not contain a folio shadow") {
 		folio := shadow.res.Value.(Folio)
-		suite.Equal(3, len(folio), "folio has the wrong number of notes. expected 3, got %s", len(folio))
+		suite.Equal(3, len(folio), "folio has the wrong number of notes")
 	}
 }
 
 func (suite *SessionTests) TestAnonWithVerifyEmailToken() {
-	// first spawn an anon session that creates the shared token
 	user := suite.createUserWith2Notes("test")
-	suite.srv.Store.Patch(Resource{Kind: "profile", ID: user.UID}, Patch{"set-email", "user/", "test@hiroapp.com", ""}, context{uid: user.UID})
+	clientA := suite.loginUser(user)
+	err := suite.srv.Handle(Event{
+		Name: "res-sync",
+		SID:  clientA.session.sid,
+		Tag:  "test",
+		Res:  Resource{Kind: "profile", ID: user.UID},
+		Changes: []Edit{{
+			Clock: SessionClock{0, 0, 0},
+			Delta: ProfileDelta{
+				UserChange{Op: "set-email", Path: "user/", Value: "test@hiroapp.com"},
+			},
+		}},
+		ctx: clientA.ctx(),
+	})
+	suite.NoError(err, "cannot set email")
 	// check for verification-req
 	var req comm.Request
 	select {
@@ -531,19 +645,20 @@ func (suite *SessionTests) TestAnonWithVerifyEmailToken() {
 	suite.Equal("verify", req.Kind, "comm.Request has wrong kind. expected `verify`, but got `%s`", req, req.Kind)
 	if suite.NotEmpty(req.Data["token"], "Token missing in comm.Request atfer invite") {
 		// now use the token to create a new anon-user
-		sessA, connA := suite.anonSession()
+		clientA := suite.anonSession()
 		// create new note
-		res := suite.addNote(sessA, connA)
+		res := suite.addNote(clientA)
 		if !suite.NotEqual(Resource{}, res) {
 			suite.T().Fatal("could not add resource")
 		}
-		connA.ClientEvent(Event{SID: sessA.sid, Name: "session-create", Token: req.Data["token"]})
-		resp := suite.awaitResponse(connA.ToClient(), "session-create response (of invitee) did not arrive")
+		suite.srv.Handle(Event{SID: clientA.session.sid, Name: "session-create", Token: req.Data["token"], ctx: clientA.ctx()})
+		resp, err := clientA.awaitResponse()
+		suite.NoError(err, "session-create response (of invitee) did not arrive")
 		// overwrite old (anon)session
 		if resp.Session == nil {
 			suite.T().Fatal("empty session received")
 		}
-		sessA = resp.Session
+		sessA := resp.Session
 		suite.Equal(user.UID, sessA.uid)
 		for i := range sessA.shadows {
 			log.Println("TEST", *sessA.shadows[i])
@@ -573,23 +688,25 @@ func (suite *SessionTests) TestAnonWithVerifyEmailToken() {
 }
 
 func (suite *SessionTests) TestUserConsumeURLShare() {
-	sessA, connA := suite.anonSession()
+	clientA := suite.anonSession()
 	// create new note
-	suite.withShareToken("url", sessA, connA, func(shareToken string, shared Resource) {
+	suite.withShareToken("url", clientA, func(shareToken string, shared Resource) {
 		// now use the token to create a new anon-user
 		user := suite.createUserWith2Notes("test")
 		token, err := suite.srv.loginToken(user.UID)
 		suite.NoError(err, "cannot create login token")
-		connB := suite.srv.NewConn()
-		connB.ClientEvent(Event{Name: "session-create", Token: token})
-		resp := suite.awaitResponse(connB.ToClient(), "session-create response did not arrive")
-		sessB := resp.Session
+		clientB := suite.sessionCreate(token)
+		sessB := clientB.session
 
-		connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: shareToken})
+		err = suite.srv.Handle(Event{SID: clientB.session.sid, Name: "token-consume", Token: shareToken})
+		suite.NoError(err, "cannot consume token")
 		// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
 		responses := [3]Event{}
 		for i := 0; i < 3; i++ {
-			responses[i] = suite.awaitResponse(connB.ToClient(), "no response from connection")
+			responses[i], err = clientB.awaitResponse()
+			if !suite.NoError(err, "%d responses missing", 3-i) {
+				break
+			}
 		}
 		var found int
 		for _, resp := range responses {
@@ -608,7 +725,7 @@ func (suite *SessionTests) TestUserConsumeURLShare() {
 					if suite.Equal(1, len(resp.Changes), "wrong number of changes for folio") {
 						if suite.Equal(1, len(resp.Changes[0].Delta.(FolioDelta)), "wrong number of changes for folio") {
 							delta := resp.Changes[0].Delta.(FolioDelta)
-							suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received, wanted a `add-noteref`, got `%s`", delta[0].Op)
+							suite.Equal("add-noteref", delta[0].Op, "wrong folio-delta received")
 							suite.Equal(shared.ID, delta[0].Value.(NoteRef).NID, "wrong nid received in folio-delta")
 						}
 					}
@@ -619,28 +736,30 @@ func (suite *SessionTests) TestUserConsumeURLShare() {
 			}
 		}
 		suite.Equal(3, found, "not all expected responses received")
-		suite.awaitAddPeer(sessA, connA, sessB.uid, shared)
+		suite.awaitAddPeer(clientA, sessB.uid, shared)
 	})
 }
 
 func (suite *SessionTests) TestUserConsumeEmailShare() {
 	user := suite.createUserWith2Notes("inviter")
-	sessA, connA := suite.loginUser(user)
-	suite.withShareToken("email", sessA, connA, func(shareToken string, shared Resource) {
+	clientA := suite.loginUser(user)
+	suite.withShareToken("email", clientA, func(shareToken string, shared Resource) {
 		// now use the token to create a new anon-user
 		user := suite.createUserWith2Notes("test")
 		token, err := suite.srv.loginToken(user.UID)
 		suite.NoError(err, "cannot create login token")
-		connB := suite.srv.NewConn()
-		connB.ClientEvent(Event{Name: "session-create", Token: token})
-		resp := suite.awaitResponse(connB.ToClient(), "session-create response did not arrive")
-		sessB := resp.Session
+		clientB := suite.sessionCreate(token)
+		sessB := clientB.session
 
-		connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: shareToken})
+		err = suite.srv.Handle(Event{SID: sessB.sid, Name: "token-consume", Token: shareToken, ctx: clientB.ctx()})
+		suite.NoError(err, "no respons to token-consume")
 		// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
 		responses := [3]Event{}
 		for i := 0; i < 3; i++ {
-			responses[i] = suite.awaitResponse(connB.ToClient(), "no response from connection")
+			responses[i], err = clientB.awaitResponse()
+			if !suite.NoError(err, "%d responses missing", 3-i) {
+				break
+			}
 		}
 		var found int
 		for _, resp := range responses {
@@ -671,28 +790,29 @@ func (suite *SessionTests) TestUserConsumeEmailShare() {
 		}
 		suite.Equal(3, found, "not all expected responses received")
 		// see if sessA got hold of the new peer
-		suite.awaitAddPeer(sessA, connA, sessB.uid, shared)
+		suite.awaitAddPeer(clientA, sessB.uid, shared)
 	})
 }
 
 func (suite *SessionTests) TestUserConsumePhoneShare() {
 	user := suite.createUserWith2Notes("inviter")
-	sessA, connA := suite.loginUser(user)
-	suite.withShareToken("phone", sessA, connA, func(shareToken string, shared Resource) {
+	clientA := suite.loginUser(user)
+	suite.withShareToken("phone", clientA, func(shareToken string, shared Resource) {
 		// now use the token to create a new anon-user
 		user := suite.createUserWith2Notes("test")
 		token, err := suite.srv.loginToken(user.UID)
 		suite.NoError(err, "cannot create login token")
-		connB := suite.srv.NewConn()
-		connB.ClientEvent(Event{Name: "session-create", Token: token})
-		resp := suite.awaitResponse(connB.ToClient(), "session-create response did not arrive")
-		sessB := resp.Session
+		clientB := suite.sessionCreate(token)
+		sessB := clientB.session
 
-		connB.ClientEvent(Event{SID: sessB.sid, Name: "token-consume", Token: shareToken})
+		err = suite.srv.Handle(Event{SID: sessB.sid, Name: "token-consume", Token: shareToken, ctx: clientB.ctx()})
 		// we're gonna get 3 responses: the token-consume echo, the folio update and the note-sync
 		responses := [3]Event{}
 		for i := 0; i < 3; i++ {
-			responses[i] = suite.awaitResponse(connB.ToClient(), "no response from connection")
+			responses[i], err = clientB.awaitResponse()
+			if !suite.NoError(err, "%d responses missing", 3-i) {
+				break
+			}
 		}
 		var found int
 		for _, resp := range responses {
@@ -723,23 +843,39 @@ func (suite *SessionTests) TestUserConsumePhoneShare() {
 		}
 		suite.Equal(3, found, "not all expected responses received")
 		// see if sessA got hold of the new peer
-		suite.awaitAddPeer(sessA, connA, sessB.uid, shared)
+		suite.awaitAddPeer(clientA, sessB.uid, shared)
 	})
 }
 
-func (suite *SessionTests) TestWithVerifyEmailToken() {
+func (suite *SessionTests) TestInvitedWithVerifyEmailToken() {
 	userA := suite.createUserWith2Notes("inviter")
-	sessA, connA := suite.loginUser(userA)
+	clientA := suite.loginUser(userA)
 	// share to notes wiht test@hiroapp.com
 	var shared Resource
-	suite.withShareToken("email", sessA, connA, func(shareToken string, res Resource) {
+	suite.withShareToken("email", clientA, func(shareToken string, res Resource) {
 		shared = res
 	})
 
 	// create a user who will signup as test and create 1 note on his own
 	userB := suite.createUserWith2Notes("test")
-	sessB, connB := suite.loginUser(userB)
-	suite.srv.Store.Patch(Resource{Kind: "profile", ID: userB.UID}, Patch{"set-email", "user/", "test@hiroapp.com", ""}, context{uid: userB.UID})
+	clientB := suite.loginUser(userB)
+
+	err := suite.srv.Handle(Event{
+		Name: "res-sync",
+		SID:  clientB.session.sid,
+		Tag:  "test",
+		Res:  Resource{Kind: "profile", ID: userB.UID},
+		Changes: []Edit{{
+			Clock: SessionClock{0, 0, 0},
+			Delta: ProfileDelta{
+				UserChange{Op: "set-email", Path: "user/", Value: "test@hiroapp.com"},
+			},
+		}},
+		ctx: clientB.ctx(),
+	})
+	suite.NoError(err, "cannot set email")
+	// await folio sync
+	clientB.awaitResponse()
 	// check for verification-req
 	var req comm.Request
 	select {
@@ -751,16 +887,19 @@ func (suite *SessionTests) TestWithVerifyEmailToken() {
 	suite.Equal("verify", req.Kind, "comm.Request has wrong kind. expected `verify`")
 	if suite.NotEmpty(req.Data["token"], "Token missing in comm.Request atfer email-set") {
 		// login "test" user and cosume the verification token
-		connB.ClientEvent(Event{SID: sessB.sid, Name: "session-create", Token: req.Data["token"]})
-		resp := suite.awaitResponse(connB.ToClient(), "session-create response (of invitee) did not arrive")
+		err := suite.srv.Handle(Event{SID: clientB.session.sid, Name: "session-create", Token: req.Data["token"], ctx: clientB.ctx()})
+		suite.NoError(err, "session create response missing")
+		resp, err := clientB.awaitResponse()
+		suite.NoError(err, "session-create response (of invitee) did not arrive")
 		// overwrite old (anon)session
 		if resp.Session == nil {
+			log.Println("WUWUUWWU %s", resp)
 			suite.T().Fatal("empty session received")
 		}
 		// overwrite with newly created session
-		sessB = resp.Session
+		sessB := resp.Session
 		suite.Equal(userB.UID, sessB.uid)
-		suite.Equal(5, len(sessA.shadows), "verify user should have 5 shadows (profile, folio, 3*note)")
+		suite.Equal(5, len(sessB.shadows), "verify user should have 5 shadows (profile, folio, 3*note)")
 
 		// check if returned session matches user.UID
 		shadow := extractShadow(sessB, "profile")
@@ -790,16 +929,21 @@ func (suite *SessionTests) TestWithVerifyEmailToken() {
 	}
 }
 
-func (suite *SessionTests) addNote(sess *Session, conn *Conn) Resource {
-	conn.ClientEvent(Event{Name: "res-sync",
+func (suite *SessionTests) addNote(client Client) Resource {
+	sess := client.session
+	err := suite.srv.Handle(Event{Name: "res-sync",
 		SID:     sess.sid,
 		Tag:     "test",
 		Res:     Resource{Kind: "folio", ID: sess.uid},
-		Changes: []Edit{{SessionClock{0, 0, 0}, FolioDelta{{"add-noteref", "", NoteRef{NID: "test", Status: "active"}}}}}})
-	resp := suite.awaitResponse(conn.ToClient(), "add-noteref response (folio-change) did not arrive")
-	// first, the ack incl changes to the folio should arrive
+		Changes: []Edit{{SessionClock{0, 0, 0}, FolioDelta{{"add-noteref", "", NoteRef{NID: "test", Status: "active"}}}}},
+		ctx:     client.ctx(),
+	})
+	suite.NoError(err, "add-noteref failed (request)")
+	resp, err := client.awaitResponse()
+	suite.NoError(err, "add-noteref failed (response)")
+	// check the folio:add-noteref ACK response from server
 	res := Resource{Kind: "note"}
-	if suite.Equal("folio", resp.Res.Kind, "first response expected to be of kind `folio`, was `%s`", resp.Res.Kind) {
+	if suite.Equal("folio", resp.Res.Kind, "folio sync expected as first response") {
 		for _, edit := range resp.Changes {
 			for _, delta := range edit.Delta.(FolioDelta) {
 				if delta.Op == "set-nid" {
@@ -813,8 +957,9 @@ func (suite *SessionTests) addNote(sess *Session, conn *Conn) Resource {
 	}
 	note := NewNote("")
 	// next response should be the initial note-change from the server
-	resp = suite.awaitResponse(conn.ToClient(), "add-noteref response (note-change) did not arrive")
-	if suite.Equal("note", resp.Res.Kind, "second response expected to be of kind `note`, was `%s`", resp.Res.Kind) {
+	resp, err = client.awaitResponse()
+	suite.NoError(err, "initial note-sync after add-note not received")
+	if suite.Equal("note", resp.Res.Kind, "note sync expected as second response") {
 		deltas := resp.Changes[0].Delta.(NoteDelta)
 		for i := range deltas {
 			if deltas[i].Op == "set-token" {
@@ -827,7 +972,8 @@ func (suite *SessionTests) addNote(sess *Session, conn *Conn) Resource {
 	res.Value = note
 
 	// ACK note-sync
-	conn.ClientEvent(Event{Name: "res-sync",
+	suite.srv.Handle(Event{
+		Name:    "res-sync",
 		SID:     sess.sid,
 		Tag:     resp.Tag,
 		Res:     resp.Res,
@@ -878,10 +1024,12 @@ func TestSessionSerialize(t *testing.T) {
 
 	ts := time.Now()
 	sess := NewSession("sid:test", "uid:test")
-	sess.addShadow(Resource{Kind: "profile", ID: "uid:test", Value: profile})
-	sess.addShadow(Resource{Kind: "folio", ID: "uid:test", Value: folio})
-	sess.addShadow(Resource{Kind: "note", ID: "nid:one", Value: Note{}})
-	sess.addShadow(Resource{Kind: "note", ID: "nid:two", Value: Note{}})
+	sess.shadows = append(sess.shadows,
+		NewShadow(Resource{Kind: "profile", ID: "uid:test", Value: profile}),
+		NewShadow(Resource{Kind: "folio", ID: "uid:test", Value: folio}),
+		NewShadow(Resource{Kind: "note", ID: "nid:one", Value: Note{}}),
+		NewShadow(Resource{Kind: "note", ID: "nid:two", Value: Note{}}),
+	)
 	sess.tainted = []Resource{Resource{Kind: "profile", ID: "uid:test"}, Resource{Kind: "note", ID: "nid:two"}}
 	sess.tags = []Tag{Tag{Ref: "note:nid:one", Val: "tag-test", LastSent: ts}}
 	sess.flushes = map[string]time.Time{"note:nid:one": ts, "profile:uid:test": ts}
