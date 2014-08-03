@@ -203,6 +203,7 @@ func checkInbox(inbox <-chan Event, session *Session, hub *SessionHub) {
 	saveTicker := time.Tick(1 * time.Minute)
 	// event loop runs is being executed for the
 	// whole lifetime of this runner.
+	idleTimeout := time.After(5 * time.Minute)
 CheckInbox:
 	for {
 		select {
@@ -212,7 +213,8 @@ CheckInbox:
 				break CheckInbox
 			}
 			session.Handle(event)
-		case <-time.After(5 * time.Minute):
+			idleTimeout = time.After(5 * time.Minute)
+		case <-idleTimeout:
 			// idle for too long, shut down
 			// session will *not* be evicted from cache
 			log.Printf("session[%s]: no action for 5 minutes; stopping runner", session.sid[:6])
