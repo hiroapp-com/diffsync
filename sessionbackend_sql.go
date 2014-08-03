@@ -80,41 +80,48 @@ func (store *SQLSessions) allocateSession() *Session {
 	return sess
 }
 
-func (store *SQLSessions) subsByQuery(qry string, args ...interface{}) ([][2]string, error) {
+func (store *SQLSessions) subsByQuery(res Resource, qry string, args ...interface{}) ([]subscription, error) {
 	rows, err := store.db.Query(qry, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	subs := [][2]string{}
+	subs := []subscription{}
 	for rows.Next() {
 		var sid, uid string
 		err := rows.Scan(&sid, &uid)
 		if err != nil {
 			return nil, err
 		}
-		subs = append(subs, [2]string{sid, uid})
+		subs = append(subs, subscription{sid: sid, uid: uid, res: res})
 	}
 	return subs, nil
 }
 
-func (store *SQLSessions) GetSubscriptions(res Resource) ([][2]string, error) {
+func (store *SQLSessions) GetSubscriptions(res Resource) ([]subscription, error) {
 	switch res.Kind {
 	case "note":
-		return store.subsByQuery("SELECT sid, uid FROM sessions WHERE uid in (SELECT uid FROM noterefs WHERE nid = ?)", res.ID)
+		// get all sessions of all users who have a noteref for this note
+		return store.subsByQuery(res, "SELECT sid, uid FROM sessions WHERE uid in (SELECT uid FROM noterefs WHERE nid = ?)", res.ID)
 	case "folio":
-		return store.subsByQuery("SELECT sid, uid FROM sessions WHERE uid = ?", res.ID)
+		// get all sessions of this folio's user
+		return store.subsByQuery(res, "SELECT sid, uid FROM sessions WHERE uid = ?", res.ID)
 	case "profile":
-		subs, err := store.subsByQuery("SELECT sid, uid FROM sessions WHERE uid = ?", res.ID)
+		// first get all session of this profile's user
+		subs, err := store.subsByQuery(res, "SELECT sid, uid FROM sessions WHERE uid = ?", res.ID)
 		if err != nil {
 			return nil, err
 		}
-		contacts, err := store.subsByQuery("SELECT sid, uid FROM sessions WHERE uid IN (SELECT uid FROM contacts WHERE contact_uid = ?)", res.ID)
+		// now also update
+		contactSubs, err := store.subsByQuery(res, "SELECT sid, uid FROM sessions WHERE uid IN (SELECT uid FROM contacts WHERE contact_uid = ?)", res.ID)
 		if err != nil {
 			return nil, err
 		}
-		subs = append(subs, contacts...)
+		for _, sub := range contactSubs {
+			sub.res.ID = sub.uid
+			subs = append(subs, sub)
+		}
 		return subs, nil
 	}
-	return [][2]string{}, nil
+	return []subscription{}, nil
 }

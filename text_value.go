@@ -57,7 +57,7 @@ func (note *TextValue) UnmarshalJSON(from []byte) error {
 	return nil
 }
 
-func (patch textPatch) Patch(val ResourceValue, store *Store) (ResourceValue, error) {
+func (patch textPatch) Patch(val ResourceValue) (ResourceValue, error) {
 	original := val.(TextValue)
 	patched, _ := dmp.PatchApply([]DMP.Patch(patch), string(original))
 	return TextValue(patched), nil

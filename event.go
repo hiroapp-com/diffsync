@@ -1,5 +1,32 @@
 package diffsync
 
+import "fmt"
+
+type EventHandler interface {
+	Handle(Event) error
+}
+
+type FuncHandler struct {
+	Fn func(Event) error
+}
+
+func (handler FuncHandler) Handle(event Event) error {
+	return handler.Fn(event)
+}
+
+type MessageAdapter interface {
+	MsgToEvent([]byte) (Event, error)
+	EventToMsg(Event) ([]byte, error)
+	Demux([]byte) ([][]byte, error)
+	Mux([][]byte) ([]byte, error)
+}
+
+type EventTimeoutError struct{}
+
+func (err EventTimeoutError) Error() string {
+	return "event timed out"
+}
+
 // Event defines the main datastructure used for communication between all components
 //
 // All incoming client messages are of type Event and all the parts

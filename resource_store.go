@@ -23,7 +23,6 @@ type ResourceBackend interface {
 type Store struct {
 	backends    map[string]ResourceBackend
 	commHandler comm.Handler
-	notify      chan<- Event
 }
 
 type Patch struct {
@@ -42,8 +41,8 @@ type InvalidValueError struct {
 	val interface{}
 }
 
-func NewStore(notify chan<- Event, comm comm.Handler) *Store {
-	return &Store{backends: map[string]ResourceBackend{}, notify: notify, commHandler: comm}
+func NewStore(comm comm.Handler) *Store {
+	return &Store{backends: map[string]ResourceBackend{}, commHandler: comm}
 }
 
 func (store *Store) Mount(kind string, backend ResourceBackend) {
@@ -76,26 +75,8 @@ func (store *Store) Load(res *Resource) error {
 	return nil
 }
 
-func (store *Store) Patch(res Resource, patch Patch, ctx context) error {
-	return store.backends[res.Kind].Patch(res.ID, patch, store, ctx)
-}
-
-func (store *Store) NotifyReset(kind, id string, ctx context) {
-	select {
-	case store.notify <- Event{Name: "res-reset", Res: Resource{Kind: kind, ID: id}, store: store, ctx: ctx}:
-		return
-	default:
-		log.Printf("store: cannot send `res-reset`, notify channel not writable.\n")
-	}
-}
-
-func (store *Store) NotifyTaint(kind, id string, ctx context) {
-	select {
-	case store.notify <- Event{Name: "res-taint", Res: Resource{Kind: kind, ID: id}, store: store, ctx: ctx}:
-		return
-	default:
-		log.Printf("store: cannot send `res-taint`, notify channel not writable.\n")
-	}
+func (store *Store) Patch(res Resource, patch Patch, result *SyncResult, ctx Context) error {
+	return store.backends[res.Kind].Patch(res.ID, patch, result, ctx)
 }
 
 func (err InvalidValueError) Error() string {

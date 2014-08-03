@@ -26,7 +26,7 @@ type SessionBackend interface {
 	Save(*Session) error
 	Delete(string) error
 	Release(*Session)
-	GetSubscriptions(Resource) ([][2]string, error)
+	GetSubscriptions(Resource) ([]subscription, error)
 }
 
 type Auther interface {
@@ -52,7 +52,7 @@ type Session struct {
 	tainted []Resource
 	flushes map[string]time.Time
 	tags    []Tag
-	client  chan<- Event
+	client  EventHandler
 }
 
 func (session *Session) String() string {
@@ -234,17 +234,12 @@ func (sess *Session) handle_token_consume(event Event) {
 
 func (sess *Session) handle_snapshot(event Event) {
 	event.Session = sess.Snapshot()
-	select {
-	case event.client <- event:
-	default:
-		log.Printf("session[%s]: snapshot requested but client gone before response", sess.sid)
-	}
+	event.ctx.Client.Handle(event)
 }
 
 func (sess *Session) handle_gone(event Event) {
-	log.Printf("session[%s]: client gone\n", sess.sid)
+	log.Printf("session[%s]: client gone\n", sess.sid[:6])
 	if sess.client != nil {
-		close(sess.client)
 		sess.client = nil
 	}
 }
@@ -304,23 +299,20 @@ func (sess *Session) flush(store *Store) {
 }
 
 func (sess *Session) handle_ehlo(event Event) {
-	log.Printf("session[%s]: received client-ehlo. saved new client and flushing changes", sess.sid)
+	log.Printf("session[%s]: received client-ehlo. saved new client and flushing changes", sess.sid[:6])
 	return
 }
 
-func (sess *Session) push_client(event Event) bool {
-	select {
-	case sess.client <- event:
-		log.Printf("session[%s]: pushed event to client: %#v", sess.sid, event)
-		return true
-	default:
+func (sess *Session) push_client(event Event) (sent bool) {
+	if sess.client == nil {
+		return false
 	}
-	// if client cannot read events, we assume he's offline
-	if sess.client != nil {
-		close(sess.client)
+	if err := sess.client.Handle(event); err != nil {
+		log.Printf("session[%s]: error pushing to client: %s", sess.sid[:6], err)
 		sess.client = nil
+		return false
 	}
-	return false
+	return true
 }
 
 func (sess *Session) getTag(ref string) (Tag, bool) {

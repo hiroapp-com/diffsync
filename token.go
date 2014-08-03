@@ -9,16 +9,10 @@ import (
 	"io"
 	"log"
 	"strings"
-	"time"
 
 	"database/sql"
 )
 
-type TokenConsumer interface {
-	CreateSession(string, string, *Store) (*Session, error)
-	Consume(string, string, *Store) (*Session, error)
-	GetUID(string) (string, error)
-}
 
 type Token struct {
 	Key        string
@@ -33,19 +27,48 @@ type Token struct {
 
 type TokenDoesNotexistError string
 
-type HiroTokens struct {
+type TokenConsumer struct {
 	db       *sql.DB
 	hub      *SessionHub
 	sessions SessionBackend
 }
 
-func NewHiroTokens(backend SessionBackend, hub *SessionHub, db *sql.DB) *HiroTokens {
-	return &HiroTokens{db, hub, backend}
+func NewTokenConsumer(backend SessionBackend, hub *SessionHub, db *sql.DB) *TokenConsumer {
+	return &TokenConsumer{db, hub, backend}
 }
 
-func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*Session, error) {
-	log.Printf("creating new session, using token `%s`", token_key)
-	token, err := tok.getToken(token_key)
+func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
+	var err error
+	var session *Session
+	switch event.Name {
+	case "session-create":
+		session, err = tok.CreateSession(event)
+		if err != nil {
+			return err
+		}
+		event.ctx.uid = session.uid
+		event.SID = session.sid
+	case "token-consume":
+		session, err := tok.consumeToken(event)
+		if err != nil {
+			return err
+		}
+		event.ctx.uid = session.uid
+		event.SID = session.sid
+	default:
+		uid, err := tok.GetUID(event.SID)
+		if err != nil {
+			return err
+		}
+		event.ctx.uid = uid
+	}
+	return next.Handle(event)
+}
+
+func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
+	log.Printf("creating new session, using token `%s`", event.Token)
+	store := event.ctx.store
+	token, err := tok.getToken(event.Token)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +78,7 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 	case "anon", "share", "share-url":
 		// anon token
 		// create new blank user
-		profile, err = store.NewResource("profile", context{sid: sid})
+		profile, err = store.NewResource("profile", Context{sid: sid})
 		if err != nil {
 			return nil, err
 		}
@@ -76,12 +99,12 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 		if changed, err := tok.addNoteRef(uid, token.NID); err != nil {
 			return nil, err
 		} else if changed {
-			store.NotifyTaint("note", token.NID, context{"", uid, time.Now()})
+			event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "note", ID: token.NID}, ctx: event.ctx})
 		}
 	}
 	// merge old session's data
-	if oldSID != "" {
-		oldSession, err := tok.hub.Snapshot(oldSID)
+	if event.SID != "" {
+		oldSession, err := tok.hub.Snapshot(event.SID, event.ctx)
 		switch err := err.(type) {
 		default:
 			return nil, err
@@ -90,7 +113,7 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 			// slow/unresponsive session. if we ignore this,
 			// old session data might get lost.
 			// instead, fail hard and let the client retry later
-			log.Printf("token: FATAL backend timed out during snapshot request. sid: `%s`", oldSID)
+			log.Printf("token: FATAL backend timed out during snapshot request. sid: `%s`", event.SID)
 			return nil, err
 		case SessionIDInvalidErr:
 			// provided SID is (for some reason) considered invalid
@@ -110,7 +133,7 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 					if changed, err := tok.stealNoteRef(oldSession.uid, uid, shadow.res.ID); err != nil {
 						return nil, err
 					} else if changed {
-						store.NotifyTaint("note", shadow.res.ID, context{session.sid, session.uid, time.Now()})
+						event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "note", ID: shadow.res.ID}, ctx: event.ctx})
 					}
 				}
 			}
@@ -132,7 +155,7 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 			}
 		}
 		for i := range newNIDs {
-			store.NotifyReset("note", newNIDs[i], context{session.sid, session.uid, time.Now()})
+			event.ctx.brdcast.Handle(Event{Name: "res-reset", Res: Resource{Kind: "note", ID: newNIDs[i]}, ctx: event.ctx})
 		}
 	}
 
@@ -141,8 +164,7 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 	if err := store.Load(&folio); err != nil {
 		return nil, err
 	}
-	session.addShadow(profile)
-	session.addShadow(folio)
+	session.shadows = append(session.shadows, NewShadow(profile), NewShadow(folio))
 	// load notes and mount shadows
 	for _, ref := range folio.Value.(Folio) {
 		log.Printf("loading add adding new note to session[%s]: `%s`\n", session.sid, ref.NID)
@@ -150,7 +172,7 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 		if err := store.Load(&res); err != nil {
 			return nil, err
 		}
-		session.addShadow(res)
+		session.shadows = append(session.shadows, NewShadow(res))
 	}
 	if err = tok.sessions.Save(session); err != nil {
 		return nil, err
@@ -158,17 +180,18 @@ func (tok *HiroTokens) CreateSession(token_key, oldSID string, store *Store) (*S
 	return session, nil
 }
 
-func (tok *HiroTokens) Consume(token_key, sid string, store *Store) (*Session, error) {
-	log.Printf("consuming token `%s` (for sid `%s`)", token_key, sid)
-	token, err := tok.getToken(token_key)
+///func (tok *TokenConsumer) Consume(token_key, sid string, store *Store) (*Session, error) {
+func (tok *TokenConsumer) consumeToken(event Event) (*Session, error) {
+	log.Printf("consuming token `%s` (for sid `%s`)", event.Token, event.SID)
+	token, err := tok.getToken(event.Token)
 	if err != nil {
 		return nil, err
 	}
 	if !strings.HasPrefix(token.Kind, "share") {
 		return nil, errors.New("cannot consume non-shareing token" + token.Kind)
 	}
-	log.Printf("loading session (%s) from hub", sid)
-	session, err := tok.hub.Snapshot(sid)
+	log.Printf("loading session (%s) from hub", event.SID)
+	session, err := tok.hub.Snapshot(event.SID, event.ctx)
 	if err != nil {
 		// todo check if session has expired or anyhing
 		// maybe we want to proceed normaly with token
@@ -185,19 +208,19 @@ func (tok *HiroTokens) Consume(token_key, sid string, store *Store) (*Session, e
 	}
 	if added {
 		// notify the session that its folio has changed
-		store.NotifyTaint("folio", session.uid, context{session.sid, session.uid, time.Now()})
-		// TODO: can we address this reset directly to session.sid?
-		store.NotifyReset("note", token.NID, context{session.sid, session.uid, time.Now()})
-		store.NotifyTaint("note", token.NID, context{session.sid, session.uid, time.Now()})
+		event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "folio", ID: session.uid}, ctx: event.ctx})
+		// addressing res-reset directly to sid (b/c its the only one interested
+		event.ctx.brdcast.Handle(Event{SID: event.ctx.sid, Name: "res-reset", Res: Resource{Kind: "note", ID: token.NID}, ctx: event.ctx})
+		event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "note", ID: token.NID}, ctx: event.ctx})
 	}
 	return session, nil
 }
 
-func (tok *HiroTokens) GetUID(sid string) (string, error) {
+func (tok *TokenConsumer) GetUID(sid string) (string, error) {
 	return tok.sessions.GetUID(sid)
 }
 
-func (tok *HiroTokens) getToken(plain string) (Token, error) {
+func (tok *TokenConsumer) getToken(plain string) (Token, error) {
 	h := sha512.New()
 	io.WriteString(h, plain)
 	hashed := hex.EncodeToString(h.Sum(nil))
@@ -213,7 +236,7 @@ func (tok *HiroTokens) getToken(plain string) (Token, error) {
 	return token, nil
 }
 
-func (tok *HiroTokens) addNoteRef(uid, nid string) (changed bool, err error) {
+func (tok *TokenConsumer) addNoteRef(uid, nid string) (changed bool, err error) {
 	// TODO mayb we can refactor this part to instead of directly modifying the DB
 	// we send an appropriate add-noteref patch down the wire to the folio-store and let the
 	// machinery do the rest
@@ -225,7 +248,7 @@ func (tok *HiroTokens) addNoteRef(uid, nid string) (changed bool, err error) {
 	return (numChanges > 0), nil
 }
 
-func (tok *HiroTokens) stealNoteRef(from_uid, to_uid, nid string) (changed bool, err error) {
+func (tok *TokenConsumer) stealNoteRef(from_uid, to_uid, nid string) (changed bool, err error) {
 	// TODO mayb we can refactor this part to instead of directly modifying the DB
 	// we send an appropriate add-noteref patch down the wire to the folio-store and let the
 	// machinery do the rest
@@ -237,7 +260,7 @@ func (tok *HiroTokens) stealNoteRef(from_uid, to_uid, nid string) (changed bool,
 	return (numChanges > 0), nil
 }
 
-func (tok *HiroTokens) verifyID(uid, kind, to_verify string) error {
+func (tok *TokenConsumer) verifyID(uid, kind, to_verify string) error {
 	switch kind {
 	case "email", "phone":
 	default:
@@ -259,7 +282,7 @@ func (tok *HiroTokens) verifyID(uid, kind, to_verify string) error {
 	}
 	return nil
 }
-func (tok *HiroTokens) sweepInvites(uid, kind, to_verify string) (invitedNIDs []string, err error) {
+func (tok *TokenConsumer) sweepInvites(uid, kind, to_verify string) (invitedNIDs []string, err error) {
 	// now see if there's an invite user with given ID dangling around
 	invitedNIDs = []string{}
 	txn, err := tok.db.Begin()
