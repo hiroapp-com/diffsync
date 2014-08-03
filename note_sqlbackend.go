@@ -39,21 +39,34 @@ func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 	note.CreatedAt = UnixTime(createdAt)
 	note.CreatedBy = User{UID: createdBy}
 	peers := PeerList{}
-	rows, err := backend.db.Query("SELECT nr.uid, users.email, u2.phone, nr.cursor_pos, nr.last_seen, nr.last_edit, nr.role FROM noterefs as nr LEFT OUTER JOIN users ON (users.uid = nr.uid and users.email_status in ('verified', 'invited')) LEFT OUTER JOIN users as u2 ON (u2.uid = nr.uid and u2.phone_status in ('verified', 'invited')) WHERE nid = ?", key)
+	rows, err := backend.db.Query(`SELECT nr.uid, 
+										  u1.tier,
+										  u1.email, 
+										  u1.email_status,
+										  u1.phone, 
+										  u1.phone_status,
+										  nr.cursor_pos, 
+										  nr.last_seen, 
+										  nr.last_edit, 
+										  nr.role 
+								    FROM noterefs as nr 
+									  LEFT JOIN users as u1
+									    ON u1.uid = nr.uid
+									WHERE nid = ?`, key)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		peer := Peer{User: User{}}
-		var email, phone sql.NullString
-		if err := rows.Scan(&peer.User.UID, &email, &phone, &peer.CursorPosition, &peer.LastSeen, &peer.LastEdit, &peer.Role); err != nil {
+		var email, emailStatus, phone, phoneStatus sql.NullString
+		if err := rows.Scan(&peer.User.UID, &peer.User.Tier, &email, &emailStatus, &phone, &phoneStatus, &peer.CursorPosition, &peer.LastSeen, &peer.LastEdit, &peer.Role); err != nil {
 			return nil, err
 		}
-		if email.Valid {
+		if emailStatus.Valid && (emailStatus.String == "verified" || emailStatus.String == "invited") {
 			peer.User.Email = email.String
 		}
-		if phone.Valid {
+		if phoneStatus.Valid && (phoneStatus.String == "verified" || phoneStatus.String == "invited") {
 			peer.User.Phone = phone.String
 		}
 		peers = append(peers, peer)
@@ -108,10 +121,8 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		//}
 		userRef := patch.Value.(User)
 		if userRef.Email != "" {
-			userRef.Name = userRef.Email
 			userRef.EmailStatus = "invited"
 		} else if userRef.Phone != "" {
-			userRef.Name = userRef.Phone
 			userRef.PhoneStatus = "invited"
 		}
 		userRef.Tier = -1
@@ -120,7 +131,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 			return err
 		}
 		// fire and forgeeeeet
-		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", ctx.uid, user.UID)
+		backend.db.Exec("INSERT INTO contacts (uid, contact_uid, name, email, phone) VALUES(?, ?, ?, ?, ?)", ctx.uid, user.UID, user.Name, user.Email, user.Phone)
 		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", user.UID, ctx.uid)
 		//TODO(flo) add contact for every other user what accesses given note OR calculate contacts
 		//			from contacts and noterefs in profilebackend.get?

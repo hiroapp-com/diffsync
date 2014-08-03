@@ -28,22 +28,31 @@ func (backend ProfileSQLBackend) Get(uid string) (ResourceValue, error) {
 		return nil, err
 	}
 	profile.User = u
-	rows, err := backend.db.Query(`SELECT uid, 
-										  tmp_uid, 
-										  name, 
-										  signup_at 
-									FROM users 
-									WHERE uid IN (select contact_uid from contacts where uid = ?) 
-										AND tier <> 0`, uid)
+	// load contacts
+	rows, err := backend.db.Query(`SELECT u.uid,
+									      u.tmp_uid,
+										  u.name as user_name,
+										  u.tier,
+										  c.name as contact_name,
+										  c.email,
+										  c.phone
+									FROM contacts as c
+									LEFT JOIN users as u 
+										ON u.uid = c.contact_uid
+									WHERE c.uid = ? and u.tier <> 0`, uid)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		user := User{}
-		if err := rows.Scan(&user.UID, &user.tmpUID, &user.Name, &user.SignupAt); err != nil {
+		var uname, cname, email, phone sql.NullString
+		if err := rows.Scan(&user.UID, &user.tmpUID, &uname, &user.Tier, &cname, &email, &phone); err != nil {
 			return nil, err
 		}
+		user.Email = email.String
+		user.Phone = phone.String
+		user.Name = firstNonEmpty(cname.String, uname.String, phone.String, email.String)
 		profile.Contacts = append(profile.Contacts, user)
 	}
 	if err := rows.Err(); err != nil {
@@ -64,12 +73,18 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, result *SyncResu
 			return nil
 		}
 		userRef := patch.Value.(User)
+		if userRef.Email != "" {
+			userRef.EmailStatus = "invited"
+		}
+		if userRef.Phone != "" {
+			userRef.PhoneStatus = "invited"
+		}
 		user, _, err := getOrCreateUser(userRef, backend.db)
 		if err != nil {
 			return err
 		}
 		// create contact, fire and forget
-		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", uid, user.UID)
+		backend.db.Exec("INSERT INTO contacts (uid, contact_uid, name, email, phone) VALUES(?, ?, ?, ?, ?)", uid, user.UID, user.Name, user.Email, user.Phone)
 		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", user.UID, uid)
 		result.Taint(Resource{Kind: "profile", ID: uid})
 	case "set-name":

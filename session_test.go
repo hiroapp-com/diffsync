@@ -409,7 +409,7 @@ func (suite *SessionTests) withShareToken(kind string, client Client, fn func(st
 		}
 		return
 	case "email":
-		invitee = User{Email: "test@hiroapp.com"}
+		invitee = User{Name: "SCHRANZ HANS", Email: "test@hiroapp.com"}
 	case "phone":
 		invitee = User{Phone: "+100012345"}
 	}

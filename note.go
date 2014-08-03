@@ -176,41 +176,46 @@ func (note Note) GetDelta(latest ResourceValue) Delta {
 		oldExisting[peer.User.UID] = peer
 	}
 	// now check out the current master-version
-	for i := range master.Peers {
-		old, ok := oldExisting[master.Peers[i].User.UID]
+	for _, masterPeer := range master.Peers {
+		old, ok := oldExisting[masterPeer.User.UID]
 		if ok {
-			delta = append(delta, diffPeerMeta(old, master.Peers[i])...)
+			delta = append(delta, diffPeerMeta(old, masterPeer)...)
 			delete(oldExisting, old.User.UID)
 			continue
 		}
 		//TODO(flo) this... hurts in the eyes. fix this.
-		if master.Peers[i].User.Email != "" {
-			if idx, ok := oldDangling.indexFromPath("email:" + master.Peers[i].User.Email); ok {
+		if masterPeer.User.Email != "" {
+			if idx, ok := oldDangling.indexFromPath("email:" + masterPeer.User.Email); ok {
+				// strip email/phone info from peers-user before building delta
+				masterPeer.User.Email = ""
 				// found current master-entry in old, dangling entries in the comparee.
-				delta = append(delta, NoteDeltaElement{"swap-user", oldDangling[idx].User.pathRef("peers"), master.Peers[i].User})
-				oldDangling[idx].User = master.Peers[i].User
+				delta = append(delta, NoteDeltaElement{"swap-user", oldDangling[idx].User.pathRef("peers"), masterPeer.User})
+				oldDangling[idx].User = masterPeer.User
 				// see if anything in the meta-info changed (e.g. last-seen/-edit timestamps, cursor-positions)
-				delta = append(delta, diffPeerMeta(oldDangling[idx], master.Peers[i])...)
+				delta = append(delta, diffPeerMeta(oldDangling[idx], masterPeer)...)
 				// remove from dangling
 				oldDangling = append(oldDangling[:idx], oldDangling[idx+1:]...)
 				continue
 			}
 		}
-		if master.Peers[i].User.Phone != "" {
-			if idx, ok := oldDangling.indexFromPath("phone:" + master.Peers[i].User.Phone); ok {
+		if masterPeer.User.Phone != "" {
+			if idx, ok := oldDangling.indexFromPath("phone:" + masterPeer.User.Phone); ok {
+				// strip email/phone info from peers-user before building delta
+				masterPeer.User.Phone = ""
 				// found current master-entry in old, dangling entries in the comparee.
-				delta = append(delta, NoteDeltaElement{"swap-user", oldDangling[idx].User.pathRef("peers"), master.Peers[i].User})
-				oldDangling[idx].User = master.Peers[i].User
+				delta = append(delta, NoteDeltaElement{"swap-user", oldDangling[idx].User.pathRef("peers"), masterPeer.User})
+				oldDangling[idx].User = masterPeer.User
 				// see if anything in the meta-info changed (e.g. last-seen/-edit timestamps, cursor-positions)
-				delta = append(delta, diffPeerMeta(oldDangling[idx], master.Peers[i])...)
+				delta = append(delta, diffPeerMeta(oldDangling[idx], masterPeer)...)
 				// remove from dangling
 				oldDangling = append(oldDangling[:idx], oldDangling[idx+1:]...)
 				continue
 			}
 		}
 		// nothing matched, Looks like a new one!
-		cpy := master.Peers[i]
-		delta = append(delta, NoteDeltaElement{"add-peer", "peers/", cpy})
+		masterPeer.User.Email = ""
+		masterPeer.User.Phone = ""
+		delta = append(delta, NoteDeltaElement{"add-peer", "peers/", masterPeer})
 	}
 	for uid, _ := range oldExisting {
 		delta = append(delta, NoteDeltaElement{Op: "rem-peer", Path: oldExisting[uid].User.pathRef("peers")})

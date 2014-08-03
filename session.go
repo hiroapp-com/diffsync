@@ -115,7 +115,7 @@ func (sess *Session) Handle(event Event) {
 	default:
 		sess.handle_notimplemented(event)
 	}
-	sess.flush(event.ctx.store)
+	sess.flush(event.ctx)
 }
 
 func (sess *Session) handle_sync(event Event) {
@@ -248,7 +248,7 @@ func (sess *Session) handle_notimplemented(event Event) {
 	return
 }
 
-func (sess *Session) flush(store *Store) {
+func (sess *Session) flush(ctx Context) {
 	// iterate over reset-resources and tainted resources and send syncs to client (if any)
 	if sess.client == nil {
 		log.Printf("session[%s]: flush requested, but client offline\n", sess.sid[:6])
