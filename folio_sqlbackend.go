@@ -39,8 +39,7 @@ func (backend FolioSQLBackend) Get(uid string) (ResourceValue, error) {
 	return folio, nil
 }
 
-func (backend FolioSQLBackend) Patch(uid string, patch Patch, store *Store, ctx context) error {
-	log.Printf("received Folio-Patch: %#v", patch)
+func (backend FolioSQLBackend) Patch(uid string, patch Patch, result *SyncResult, ctx Context) error {
 	switch patch.Op {
 	case "rem-noteref":
 		// patch.Path contains Note ID
@@ -50,7 +49,9 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, store *Store, ctx 
 		if err != nil {
 			return err
 		}
-		// TODO(taint): note(nid) & folio(uid)
+		result.Removed(Resource{Kind: "note", ID: patch.Path})
+		result.Taint(Resource{Kind: "note", ID: patch.Path})
+		result.Taint(Resource{Kind: "folio", ID: uid})
 	case "set-status":
 		// patch.Path contains Note ID
 		// patch.Value contains new Status
@@ -63,6 +64,7 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, store *Store, ctx 
 		if err != nil {
 			return fmt.Errorf("folioSQLbackend: uid(%s) status change for nid(%s): could not persist new status: `%s`", uid, patch.Path, status)
 		}
+		result.Taint(Resource{Kind: "folio", ID: uid})
 	case "add-noteref":
 		// patch.Path empty
 		// patch.Value contains new NoteRef value
@@ -72,7 +74,7 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, store *Store, ctx 
 		role := "active"
 		if len(noteref.NID) < 5 {
 			// save blank note with new NID
-			newnote, err := store.NewResource("note", ctx)
+			newnote, err := ctx.store.NewResource("note", ctx)
 			if err != nil {
 				return err
 			}
@@ -83,12 +85,13 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, store *Store, ctx 
 		// TODO(flo) check permissin?
 		// fire and forgeeeeet
 		backend.db.Exec("UPDATE noterefs SET tmp_nid = ?, status = ?, role = ? WHERE uid = ? and nid = ?", noteref.tmpNID, noteref.Status, role, uid, noteref.NID)
-		store.NotifyReset("note", noteref.NID, ctx)
-		store.NotifyTaint("note", noteref.NID, ctx)
+		result.Reset(Resource{Kind: "note", ID: noteref.NID})
+		result.Taint(Resource{Kind: "note", ID: noteref.NID})
+		result.Taint(Resource{Kind: "folio", ID: uid})
 	}
 	return nil
 }
 
-func (backend FolioSQLBackend) CreateEmpty(ctx context) (string, error) {
+func (backend FolioSQLBackend) CreateEmpty(ctx Context) (string, error) {
 	return "", fmt.Errorf("folioSQLbackend: one does not simply createn a new Folio (use Get(uid) instead)")
 }

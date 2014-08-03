@@ -6,6 +6,12 @@ import (
 	"log"
 )
 
+type SyncResult struct {
+	tainted []Resource
+	removed []Resource
+	reset   []Resource
+}
+
 type Shadow struct {
 	res     Resource
 	backup  ResourceValue
@@ -31,6 +37,10 @@ func NewShadow(res Resource) *Shadow {
 	}
 }
 
+func NewSyncResult() *SyncResult {
+	return &SyncResult{tainted: []Resource{}, reset: []Resource{}}
+}
+
 func (shadow *Shadow) Rollback() {
 	shadow.res.Value = shadow.backup
 	shadow.pending = []Edit{}
@@ -54,8 +64,7 @@ func (shadow *Shadow) UpdatePending(store *Store) bool {
 	shadow.IncSv()
 	return true
 }
-
-func (shadow *Shadow) SyncIncoming(edit Edit, store *Store, ctx context) (err error) {
+func (shadow *Shadow) SyncIncoming(edit Edit, result *SyncResult, ctx Context) error {
 	// Make sure clocks are in sync or recoverable
 	log.Printf("shadow[%s]: sync incoming edit: `%v`\n", shadow.res.StringRef(), edit)
 	if err := shadow.SessionClock.SyncSvWith(edit.Clock, shadow); err != nil {
@@ -190,4 +199,43 @@ func (shadow *Shadow) UnmarshalJSON(from []byte) error {
 		}
 	}
 	return nil
+}
+
+func (result *SyncResult) Taint(res Resource) {
+	if result.tainted == nil {
+		result.tainted = []Resource{}
+	}
+	for i := range result.tainted {
+		if res.SameRef(result.tainted[i]) {
+			// exists already
+			return
+		}
+	}
+	result.tainted = append(result.tainted, res)
+}
+
+func (result *SyncResult) Removed(res Resource) {
+	if result.removed == nil {
+		result.removed = []Resource{}
+	}
+	for i := range result.removed {
+		if res.SameRef(result.removed[i]) {
+			// exists already
+			return
+		}
+	}
+	result.removed = append(result.removed, res)
+}
+
+func (result *SyncResult) Reset(res Resource) {
+	if result.reset == nil {
+		result.reset = []Resource{}
+	}
+	for i := range result.reset {
+		if res.SameRef(result.reset[i]) {
+			// exists already
+			return
+		}
+	}
+	result.reset = append(result.reset, res)
 }

@@ -52,7 +52,7 @@ func (backend ProfileSQLBackend) Get(uid string) (ResourceValue, error) {
 	return profile, nil
 }
 
-func (backend ProfileSQLBackend) Patch(uid string, patch Patch, store *Store, ctx context) error {
+func (backend ProfileSQLBackend) Patch(uid string, patch Patch, result *SyncResult, ctx Context) error {
 	log.Printf("received Profile-Patch: %#v", patch)
 	switch patch.Op {
 	case "add-user":
@@ -71,6 +71,7 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, store *Store, ct
 		// create contact, fire and forget
 		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", uid, user.UID)
 		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", user.UID, uid)
+		result.Taint(Resource{Kind: "profile", ID: uid})
 	case "set-name":
 		// patch.Path empty (i.e. only setting own name supported for now)
 		// patch.Value contains the new Name
@@ -79,6 +80,7 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, store *Store, ct
 		if err != nil {
 			return err
 		}
+		result.Taint(Resource{Kind: "profile", ID: uid})
 	case "set-email":
 		// patch.Path must be "user/"
 		// patch.Value contains the new Email
@@ -91,8 +93,9 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, store *Store, ct
 			return err
 		}
 		if affected, _ := res.RowsAffected(); affected > 0 {
-			go backend.sendVerifyToken(uid, emailRcpt(User{Email: patch.Value.(string)}), store)
+			go backend.sendVerifyToken(uid, emailRcpt(User{Email: patch.Value.(string)}), ctx.store)
 		}
+		result.Taint(Resource{Kind: "profile", ID: uid})
 
 	case "set-tier":
 		// patch.Path must be "user/"
@@ -109,11 +112,12 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, store *Store, ct
 		if err != nil {
 			return err
 		}
+		result.Taint(Resource{Kind: "profile", ID: uid})
 	}
 	return nil
 }
 
-func (backend ProfileSQLBackend) CreateEmpty(ctx context) (string, error) {
+func (backend ProfileSQLBackend) CreateEmpty(ctx Context) (string, error) {
 	user, _, err := getOrCreateUser(User{createdForSID: ctx.sid}, backend.db)
 	return user.UID, err
 }

@@ -149,11 +149,22 @@ func (sess *Session) handle_sync(event Event) {
 		return
 
 	}
+	result := NewSyncResult()
 	for _, edit := range event.Changes {
-		err := shadow.SyncIncoming(edit, event.store, event.ctx)
+		err := shadow.SyncIncoming(edit, result, event.ctx)
 		if err != nil {
+			// TODO: we could also put detailed error info into `result`
+			// e.g. reasons why an edit failed
 			log.Println("ERRR sync:", err) //todo error handling! do we need 'changed' here?
 		}
+	}
+	for _, res := range result.reset {
+		sess.addShadow(res, event.ctx)
+		event.ctx.brdcast.Handle(Event{Name: "res-reset", Res: res, ctx: event.ctx})
+	}
+	for _, res := range result.tainted {
+		sess.markTainted(res)
+		event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: res, ctx: event.ctx})
 	}
 	tag, ok := sess.getTag(shadow.res.StringRef())
 	if ok {
@@ -364,7 +375,13 @@ func (sess *Session) markTainted(res Resource) {
 		// There is always at most 1 writer for each session, see SessionHub implementation.
 		return
 	}
-	sess.tainted = append(sess.tainted, ref)
+	// only taint if we have a shadow
+	for i := range sess.shadows {
+		if res.SameRef(sess.shadows[i].res) {
+			sess.tainted = append(sess.tainted, ref)
+			return
+		}
+	}
 }
 
 func (sess *Session) tickoffTainted(res Resource) {

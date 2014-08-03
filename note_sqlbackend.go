@@ -71,13 +71,14 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		// patch.Path empty
 		// patch.Value contains text-patches
 		// patch.OldValue empty
-		err := backend.patchText(nid, patch.Value.([]DMP.Patch))
+		err := backend.patchText(nid, patch.Value.([]DMP.Patch), result)
 		if err != nil {
 			return fmt.Errorf("notesqlbackend: note(%s) could not be patched. patch: `%v`, err: `%s`", nid, patch.Value, err)
 		}
 		if err = backend.pokeTimers(nid, true, ctx); err != nil {
 			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
+		result.Taint(Resource{Kind: "note", ID: nid})
 	case "title":
 		// patch.Path empty
 		// patch.Value contains new Title
@@ -90,6 +91,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if err = backend.pokeTimers(nid, numChanges > 0, ctx); err != nil {
 			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
+		result.Taint(Resource{Kind: "note", ID: nid})
 	case "invite-user":
 		// patch.Path emtpy
 		// patch.Value contains User object (maybe without UID)
@@ -127,14 +129,14 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 			return fmt.Errorf("could not create note-ref for invitee: nid: %s, uid: %s", nid, user.UID)
 		}
 		if affected, _ := res.RowsAffected(); affected > 0 {
-			go backend.sendInvite(user, nid, store, ctx)
+			go backend.sendInvite(user, nid, ctx)
 		}
 		// taint profile so its and it's contact's contact lists get updated
-		store.NotifyTaint("profile", ctx.uid, ctx)
+		result.Taint(Resource{Kind: "profile", ID: ctx.uid})
 		// reset so SID gets shadow
-		store.NotifyReset("note", nid, ctx) // TODO address SID directly
+		result.Reset(Resource{Kind: "note", ID: nid})
 		// taint to all others get the peers update
-		store.NotifyTaint("note", nid, ctx)
+		result.Taint(Resource{Kind: "note", ID: nid})
 	case "set-cursor":
 		// patch.Path contains UID of peer whose cursor to set
 		// patch.Value contains int64 with new cursor position
@@ -146,6 +148,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if err != nil {
 			return err
 		}
+		result.Taint(Resource{Kind: "note", ID: nid})
 	case "rem-peer":
 		// patch.Path contains UID of peer to remove
 		// patch.Value empty
@@ -154,6 +157,13 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if err != nil {
 			return err
 		}
+		// n.b we're not adding the resource to removed since we're not removing it
+		// from this session. this means that the actual removal from the removed
+		// user's session-shadows will not be propagated.
+		// that means someone *could* (if put enought effort to it) still sync the note
+		// given that he retained all intofmation (note-id etc) and implemented the
+		// protocoll
+		result.Taint(Resource{Kind: "note", ID: nid})
 	case "set-seen":
 		// patch.Path contains UID of peer who has seen stuff
 		// patch.Value empty
@@ -190,7 +200,7 @@ func (backend NoteSQLBackend) CreateEmpty(ctx Context) (string, error) {
 	return nid, nil
 }
 
-func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch) error {
+func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch, result *SyncResult) error {
 	txn, err := backend.db.Begin()
 	if err != nil {
 		return err
