@@ -65,8 +65,7 @@ func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 	return note, nil
 }
 
-func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx context) error {
-	log.Printf("note-backend: received patch for note[%s]: %v", nid, patch)
+func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult, ctx Context) error {
 	switch patch.Op {
 	case "text":
 		// patch.Path empty
@@ -165,11 +164,12 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, store *Store, ctx c
 		if err := backend.pokeTimers(nid, true, ctx); err != nil {
 			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
+		result.Taint(Resource{Kind: "note", ID: nid})
 	}
 	return nil
 }
 
-func (backend NoteSQLBackend) CreateEmpty(ctx context) (string, error) {
+func (backend NoteSQLBackend) CreateEmpty(ctx Context) (string, error) {
 	note := NewNote("")
 	nid := generateNID()
 	token, hashed := generateToken()
@@ -210,10 +210,13 @@ func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch) error {
 		return err
 	}
 	txn.Commit()
+	if original != patched {
+		result.Taint(Resource{Kind: "note", ID: id})
+	}
 	return nil
 }
 
-func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx context) (err error) {
+func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx Context) (err error) {
 	if edited {
 		_, err = backend.db.Exec("UPDATE noterefs SET last_seen = datetime('now'), last_edit = datetime('now') WHERE nid = ? AND uid = ?", id, ctx.uid)
 	} else {
@@ -222,14 +225,14 @@ func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx context) (e
 	return
 }
 
-func (backend NoteSQLBackend) sendInvite(user User, nid string, store *Store, ctx context) {
+func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 	rcpt := preferredRcpt(user)
 	token, hashed := generateToken()
 	reqData := map[string]string{"token": token}
 	// get info from inviter
 	res := Resource{Kind: "profile", ID: ctx.uid}
 	inviter := User{}
-	if err := store.Load(&res); err != nil {
+	if err := ctx.store.Load(&res); err != nil {
 		log.Printf("error: sendInvite could not fetch profile info of inviter; err: %v", err)
 	} else {
 		inviter = res.Value.(Profile).User
@@ -257,7 +260,7 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, store *Store, ct
 	// collect info about the shared note
 	note := NewNote("")
 	res = Resource{Kind: "note", ID: nid}
-	if err = store.Load(&res); err != nil {
+	if err = ctx.store.Load(&res); err != nil {
 		log.Printf("error: sendInvite could not fetch note info of shared note; err: %v", err)
 	} else {
 		note = res.Value.(Note)
@@ -270,7 +273,7 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, store *Store, ct
 	reqData["note_title"] = note.Title
 	reqData["num_peers"] = strconv.Itoa(len(note.Peers))
 	req := comm.NewRequest("invite", rcpt, reqData)
-	if err = store.commHandler(req); err != nil {
+	if err = ctx.store.commHandler(req); err != nil {
 		log.Printf("error: sendInvite could not forward request to comm.Handler; err: %v", err)
 	}
 }

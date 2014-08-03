@@ -4,8 +4,10 @@ import (
 	"time"
 )
 
-type context struct {
-	sid string
-	uid string
-	ts  time.Time
+type Context struct {
+	sid     string
+	uid     string
+	ts      time.Time
+	store   *Store
+	}
 }

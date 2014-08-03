@@ -71,12 +71,26 @@ type Event struct {
 	// to send on the last set client.
 	// a new incoming Event.client will overwrite also existing (and maybe still
 	// living) client.
-	client chan<- Event
 
-	ctx   context
-	store *Store
+	ctx Context
 }
 
 func NewEvent() Event {
-	return Event{Changes: []Edit{}, Res: Resource{}, Session: nil, ctx: context{}}
+	return Event{Changes: []Edit{}, Res: Resource{}, Session: nil, ctx: Context{}}
+}
+
+func (event Event) String() string {
+	return fmt.Sprintf("<event %s res: %s, sid: %s, tag: %s, token: %s, changes: %s, session: %s>",
+		event.Name,
+		event.Res.StringRef(),
+		event.SID,
+		event.Tag,
+		event.Token,
+		event.Changes,
+		event.Session,
+	)
+}
+
+func (event *Event) Context(ctx Context) {
+	event.ctx = ctx
 }

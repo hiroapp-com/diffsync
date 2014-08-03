@@ -16,8 +16,8 @@ var (
 
 type ResourceBackend interface {
 	Get(string) (ResourceValue, error)
-	Patch(string, Patch, *Store, context) error
-	CreateEmpty(context) (string, error)
+	Patch(string, Patch, *SyncResult, Context) error
+	CreateEmpty(Context) (string, error)
 }
 
 type Store struct {
@@ -50,7 +50,7 @@ func (store *Store) Mount(kind string, backend ResourceBackend) {
 	store.backends[kind] = backend
 }
 
-func (store *Store) NewResource(kind string, ctx context) (Resource, error) {
+func (store *Store) NewResource(kind string, ctx Context) (Resource, error) {
 	res := Resource{Kind: kind}
 	// create new Nil Resource in backend
 	var err error
@@ -66,7 +66,7 @@ func (store *Store) NewResource(kind string, ctx context) (Resource, error) {
 }
 
 func (store *Store) Load(res *Resource) error {
-	log.Printf("resource[%s:%p]: loading data", res.StringRef(), res)
+	log.Printf("resource[%s]: loading data", res.StringRef())
 	// todo: send get request via gdata connection
 	value, err := store.backends[res.Kind].Get(res.ID)
 	if err != nil {

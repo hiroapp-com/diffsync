@@ -30,7 +30,7 @@ type SessionBackend interface {
 }
 
 type Auther interface {
-	Grant(context, string, Resource)
+	Grant(Context, string, Resource)
 }
 
 type ResourceRegistry map[string]map[string]bool
@@ -82,10 +82,18 @@ func NewSession(sid, uid string) *Session {
 }
 
 func (sess *Session) Handle(event Event) {
-	log.Printf("session[%s]: handling %s event\n", sess.sid, event.Name)
-	if event.Name != "snapshot" && event.client != nil {
-		log.Printf("session[%s]: setting upstream client chan\n", sess.sid)
-		sess.client = event.client
+	log.Printf("session[%s]: handling %s event\n", sess.sid[:6], event.Name)
+	if event.SID != sess.sid {
+		panic("RECEIVED INVALID SID WTF?!")
+		return
+	}
+	if event.ctx.Client != nil {
+		switch event.Name {
+		case "session-create", "token-consume", "client-ehlo", "res-sync":
+			log.Printf("session[%s]: setting upstream client chan\n", sess.sid[:6])
+			sess.client = event.ctx.Client
+		default:
+		}
 	}
 	switch event.Name {
 	case "session-create":
@@ -107,7 +115,7 @@ func (sess *Session) Handle(event Event) {
 	default:
 		sess.handle_notimplemented(event)
 	}
-	sess.flush(event.store)
+	sess.flush(event.ctx.store)
 }
 
 func (sess *Session) handle_sync(event Event) {
@@ -120,11 +128,11 @@ func (sess *Session) handle_sync(event Event) {
 		// TODO(flo) data validation should happen in adapter/connection layer
 		// eeeek, log and or respond that data was malformed
 		// for now just discard
-		log.Printf("session[%s]: malformed data; res missing\n", sess.sid)
+		log.Printf("session[%s]: malformed data; res missing\n", sess.sid[:6])
 		return
 	}
 	if event.Changes == nil {
-		log.Printf("session[%s]: malformed data; changes missing\n", sess.sid)
+		log.Printf("session[%s]: malformed data; changes missing\n", sess.sid[:6])
 		return
 	}
 	// todo(ACL) check if session may access data.res
@@ -168,12 +176,12 @@ func (sess *Session) handle_sync(event Event) {
 	// ACK'ing a client's sync-SYN
 
 	// calculate changes and add them to pending and incease our SV
-	shadow.UpdatePending(event.store)
+	shadow.UpdatePending(event.ctx.store)
 	event.Changes = shadow.pending
 	if !sess.push_client(event) {
 		// edge-case happened: client sent request and disconnected before we
 		// could response. set tainted state for resource.
-		log.Printf("session[%s]: client went offline during sync, resource (%s)", sess.sid, event.Res.StringRef())
+		log.Printf("session[%s]: client went offline during sync, resource (%s)", sess.sid[:6], event.Res.StringRef())
 		//TODO the response is now los in the nirvana and the tag never ACK'd. should we expect the client to resend
 		// an SYN?
 	}
@@ -181,38 +189,30 @@ func (sess *Session) handle_sync(event Event) {
 }
 
 func (sess *Session) handle_taint(event Event) {
-	log.Printf("session[%s]: handling taint event for %s, all tainted: %s", sess.sid, event.Res, sess.tainted)
+	log.Printf("session[%s]: handling taint event for %s, all tainted: %s", sess.sid[:6], event.Res, sess.tainted)
 	lastFlush := sess.flushes[event.Res.StringRef()]
 	if event.ctx.ts.Before(lastFlush) {
-		log.Printf("session[%s]: old taint, changes already flushed. event timestamp: %s, last flush: %s", sess.sid, event.ctx.ts, lastFlush)
+		log.Printf("session[%s]: old taint, changes already flushed. event timestamp: %s, last flush: %s", sess.sid[:6], event.ctx.ts, lastFlush)
 		return
 	}
 	sess.markTainted(event.Res)
-	log.Printf("session[%s]:  all tainted: %s", sess.sid, sess.tainted)
+	log.Printf("session[%s]:  all tainted: %s", sess.sid[:6], sess.tainted)
 }
 
 func (sess *Session) handle_reset(event Event) {
-	if sess.hasShadow(event.Res) {
-		// already exists in shdows. shadow-swap not supported yes
-		// this check can be removed later: after the whole "get me the correct empty value"
-		// moved into Store, we can simply call sess.addShadow and expect it to check
-		// if a shadow already exists
-		return
-	}
-	err := event.store.Load(&event.Res)
-	if err != nil {
-		return
-	}
-	// store reset value
-	event.Res.Value = event.Res.Value.Empty()
-	// TODO(flo) refactor: store needs to implement EmptyValue() and use resourcebackends Empty() as the
-	// official place to define empty resource values
-	log.Printf("session[%s]: storing new blank resource in shadows %s", sess.sid, event.Res.StringRef())
-	sess.addShadow(event.Res)
+	sess.addShadow(event.Res, event.ctx)
 }
 
 func (sess *Session) handle_session_create(event Event) {
 	event.Session = sess
+	if event.ctx.sid != "" {
+		// the response to a session-create which was triggered
+		// by anothoer session (e.g. anon(sid)->login(token))
+		// should address the "old" sid in the Event.
+		// The client will receive the new sid for further actions
+		// when he takes over the new Event.Session payload
+		event.SID = event.ctx.sid
+	}
 	sess.push_client(event)
 }
 
@@ -245,11 +245,11 @@ func (sess *Session) handle_notimplemented(event Event) {
 func (sess *Session) flush(store *Store) {
 	// iterate over reset-resources and tainted resources and send syncs to client (if any)
 	if sess.client == nil {
-		log.Printf("session[%s]: flush requested, but client offline\n", sess.sid)
+		log.Printf("session[%s]: flush requested, but client offline\n", sess.sid[:6])
 		// TODO(flo) check if any tags timed out (due to missing client) and taint them again
 		return
 	}
-	log.Printf("session[%s]: flush requested\n", sess.sid)
+	log.Printf("session[%s]: flush requested\n", sess.sid[:6])
 	for _, res := range sess.tainted {
 		shadow, ok := sess.getShadow(res)
 		if !ok {
@@ -268,20 +268,20 @@ func (sess *Session) flush(store *Store) {
 			event := Event{Name: "res-sync", Tag: tag.Val, SID: sess.sid, Res: res.Ref(), Changes: shadow.pending}
 			if !sess.push_client(event) {
 				// client went offline, stop for now
-				log.Printf("session[%s]: client went offline during flush. aborting", sess.sid)
+				log.Printf("session[%s]: client went offline during flush. aborting", sess.sid[:6])
 				return
 			}
 			sess.tagSent(res.StringRef())
 			continue
 		}
-		log.Printf("session[%s]: flushin' tainted resource: %s\n", sess.sid, res)
+		log.Printf("session[%s]: flushin' tainted resource: %s\n", sess.sid[:6], res)
 		modified := shadow.UpdatePending(store)
 		if modified {
 			newTag := sess.createTag(res.StringRef())
 			event := Event{Name: "res-sync", Tag: newTag, SID: sess.sid, Res: res.Ref(), Changes: shadow.pending}
 			if !sess.push_client(event) {
 				// client went offline, stop for now
-				log.Printf("session[%s]: client went offline during flush. aborting", sess.sid)
+				log.Printf("session[%s]: client went offline during flush. aborting", sess.sid[:6])
 				return
 			}
 			sess.tagSent(res.StringRef())
@@ -376,10 +376,23 @@ func (sess *Session) tickoffTainted(res Resource) {
 	}
 }
 
-func (sess *Session) addShadow(res Resource) {
+func (sess *Session) addShadow(res Resource, ctx Context) {
 	if sess.hasShadow(res) {
+		// already exists in shdows. shadow-swap not supported yes
+		// this check can be removed later: after the whole "get me the correct empty value"
+		// moved into Store, we can simply call sess.addShadow and expect it to check
+		// if a shadow already exists
 		return
 	}
+	err := ctx.store.Load(&res)
+	if err != nil {
+		return
+	}
+	// store reset value
+	res.Value = res.Value.Empty()
+	// TODO(flo) refactor: store needs to implement EmptyValue() and use resourcebackends Empty() as the
+	// official place to define empty resource values
+	log.Printf("session[%s]: storing new blank resource in shadows %s", sess.sid[:6], res.StringRef())
 	sess.shadows = append(sess.shadows, NewShadow(res))
 }
 
@@ -411,7 +424,7 @@ func (sess *Session) diff_resources(check []Resource) []Resource {
 	return news
 }
 
-func (sess *Session) Grant(ctx context, action string, res Resource) bool {
+func (sess *Session) Grant(ctx Context, action string, res Resource) bool {
 	return true
 }
 
