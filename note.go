@@ -239,7 +239,7 @@ func (delta *NoteDeltaElement) UnmarshalJSON(from []byte) (err error) {
 	delta.Op = tmp.Op
 	delta.Path = tmp.Path
 	switch tmp.Op {
-	case "invite":
+	case "invite", "swap-user":
 		u := User{}
 		if err = json.Unmarshal(tmp.RawValue, &u); err == nil {
 			delta.Value = u

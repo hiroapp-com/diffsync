@@ -19,15 +19,16 @@ func NewSQLSessions(db *sql.DB) *SQLSessions {
 }
 
 func (store *SQLSessions) Get(sid string) (*Session, error) {
-	session := store.allocateSession()
+	session := NewSession(sid, "")
 	err := store.db.QueryRow("SELECT data FROM sessions where sid = ?", sid).Scan(session)
 	if err == sql.ErrNoRows {
-		store.Release(session)
+		//store.Release(session)
 		return nil, SessionIDInvalidErr{sid}
 	} else if err != nil {
-		store.Release(session)
+		//store.Release(session)
 		return nil, err
 	}
+
 	return session, nil
 }
 
