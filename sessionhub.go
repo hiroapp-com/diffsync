@@ -58,7 +58,7 @@ func (handler BroadcastHandler) Handle(event Event) error {
 func NewSessionHub(backend SessionBackend) *SessionHub {
 	return &SessionHub{
 		inbox:       make(chan Event),
-		runner_done: make(chan string),
+		runner_done: make(chan string, 64),
 		active:      map[string]chan Event{},
 		cache:       map[string]*Session{},
 		cacheIndex:  make([]string, 0, 1024),
@@ -195,11 +195,12 @@ func checkInbox(inbox <-chan Event, session *Session, hub *SessionHub) {
 	if session == nil {
 		panic("NILSESSION")
 	}
-	defer func(sid string) {
+	defer func(sid string, done chan string) {
 		//signal shuwdown of runner to hub
-		hub.runner_done <- sid
-	}(session.sid)
-	log.Printf("session[%s]: starting runner\n", session.sid[:6])
+		done <- sid
+	}(session.sid, hub.runner_done)
+
+	log.Printf("(sessionhub starting runner for %s)", session.sid)
 	saveTicker := time.Tick(1 * time.Minute)
 	// event loop runs is being executed for the
 	// whole lifetime of this runner.
