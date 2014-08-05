@@ -52,7 +52,7 @@ func (backend ProfileSQLBackend) Get(uid string) (ResourceValue, error) {
 		}
 		user.Email = email.String
 		user.Phone = phone.String
-		user.Name = firstNonEmpty(cname.String, uname.String, phone.String, email.String)
+		user.Name = firstNonEmpty(cname.String, uname.String)
 		profile.Contacts = append(profile.Contacts, user)
 	}
 	if err := rows.Err(); err != nil {
