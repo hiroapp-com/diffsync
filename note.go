@@ -264,6 +264,8 @@ func (delta *NoteDeltaElement) UnmarshalJSON(from []byte) (err error) {
 		if err = json.Unmarshal(tmp.RawValue, &tv); err == nil {
 			delta.Value = tv
 		}
+	case "rem-peer":
+		// no value provided, donothing
 	default:
 		s := ""
 		if err = json.Unmarshal(tmp.RawValue, &s); err == nil {
