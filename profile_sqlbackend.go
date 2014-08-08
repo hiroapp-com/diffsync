@@ -103,7 +103,7 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, result *SyncResu
 		if patch.Path != "user/" || uid != ctx.uid {
 			return nil
 		}
-		res, err := backend.db.Exec("UPDATE users SET email = ?, email_status = 'unverified' WHERE uid = ? AND email = ? AND (SELECT count(uid) from users where email = ? and email_status <> 'invited') = 0", patch.Value.(string), uid, patch.OldValue.(string))
+		res, err := backend.db.Exec("UPDATE users SET email = ?, email_status = 'unverified' WHERE uid = ? AND email = ? AND (SELECT count(uid) from users where email = ? and email_status <> 'invited') = 0", patch.Value.(string), uid, patch.OldValue.(string), patch.Value.(string))
 		if err != nil {
 			return err
 		}

@@ -9,13 +9,9 @@ import (
 )
 
 func TestNoteSerialize(t *testing.T) {
-	ts := time.Now().Round(time.Second)
-	unixTs := UnixTime(ts)
 	note := Note{Title: "title-test",
 		Text:         "text-test",
 		SharingToken: "token-test",
-		CreatedAt:    unixTs,
-		CreatedBy:    User{UID: "uid-owner"},
 		Peers: PeerList{
 			Peer{User: User{UID: "uid-owner"}},
 			Peer{User: User{UID: "uid-peer"}},
@@ -29,8 +25,6 @@ func TestNoteSerialize(t *testing.T) {
 			assert.Equal(t, "title-test", note.Title, "title mismatch after serialization")
 			assert.Equal(t, "text-test", note.Text, "text mismatch after serialization")
 			assert.Equal(t, "token-test", note.SharingToken, "sharing_token mismatch after serialization")
-			assert.Equal(t, unixTs, note.CreatedAt, "created_at mismatch after serialization")
-			assert.Equal(t, "uid-owner", note.CreatedBy.UID, "created_by.uid mismatch after serialization")
 			assert.Equal(t, 2, len(note.Peers), "wrong number of peers after serialization")
 		}
 	}
