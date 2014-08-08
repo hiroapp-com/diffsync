@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"strconv"
-	"time"
 
 	"database/sql"
 
@@ -26,9 +25,8 @@ func NewNoteSQLBackend(db *sql.DB) NoteSQLBackend {
 
 func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 	note := NewNote("")
-	var txt, createdBy string
-	var createdAt time.Time
-	err := backend.db.QueryRow("SELECT title, txt, sharing_token, created_at, created_by FROM notes WHERE nid = ?", key).Scan(&note.Title, &txt, &note.SharingToken, &createdAt, &createdBy)
+	var txt string
+	err := backend.db.QueryRow("SELECT title, txt, sharing_token FROM notes WHERE nid = ?", key).Scan(&note.Title, &txt, &note.SharingToken)
 	switch {
 	case err == sql.ErrNoRows:
 		return nil, NoExistError{key}
@@ -36,8 +34,6 @@ func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 		return nil, err
 	}
 	note.Text = TextValue(txt)
-	note.CreatedAt = UnixTime(createdAt)
-	note.CreatedBy = User{UID: createdBy}
 	peers := PeerList{}
 	rows, err := backend.db.Query(`SELECT nr.uid, 
 										  u1.tier,

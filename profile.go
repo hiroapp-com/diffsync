@@ -24,7 +24,7 @@ type User struct {
 	PhoneStatus   string     `json:"email_status"`
 	Plan          string     `json:"plan,omitempty"`
 	Tier          int64      `json:"tier,omitempty"`
-	SignupAt      *time.Time `json:"signup_at"`
+	SignupAt      *time.Time `json:"signup_at,omitempty"`
 	CreatedAt     *time.Time `json:"-"`
 	tmpUID        string     `json:"-"`
 	createdForSID string     `json:"-"`

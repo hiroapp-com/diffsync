@@ -21,8 +21,8 @@ type Note struct {
 	Text         TextValue `json:"text"`
 	Peers        PeerList  `json:"peers"`
 	SharingToken string    `json:"sharing_token"`
-	CreatedAt    UnixTime  `json:"created_at"`
-	CreatedBy    User      `json:"created_by"`
+	CreatedAt    UnixTime  `json:"-"`
+	CreatedBy    User      `json:"-"`
 }
 
 func (note Note) String() string {
