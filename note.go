@@ -364,20 +364,12 @@ func diffPeerMeta(lhs, rhs Peer) NoteDelta {
 	if lhs.CursorPosition != rhs.CursorPosition {
 		delta = append(delta, NoteDeltaElement{"set-cursor", path, rhs.CursorPosition})
 	}
-	if rhs.LastSeen == nil && lhs.LastSeen == nil {
-		//nothing to do here. LastEdit can also not be different, since
-		// it cannotbe that last_seen is nil, but not last_edit
-		return delta
-	} else if lhs.LastSeen == nil || time.Time(*lhs.LastSeen).Before(time.Time(*rhs.LastSeen)) {
-		// rhs is now != nil
+	if rhs.LastSeen != nil && (lhs.LastSeen == nil || time.Time(*lhs.LastSeen).Before(time.Time(*rhs.LastSeen))) {
 		timestamps := Timestamp{Seen: rhs.LastSeen}
-		if lhs.LastEdit == nil && rhs.LastEdit == nil {
-			delta = append(delta, NoteDeltaElement{"set-ts", path, timestamps})
-			return delta
-		} else if lhs.LastEdit == nil || time.Time(*lhs.LastEdit).Before(time.Time(*rhs.LastEdit)) {
+		if rhs.LastEdit != nil && (lhs.LastEdit == nil || time.Time(*lhs.LastEdit).Before(time.Time(*rhs.LastEdit))) {
 			timestamps.Edit = rhs.LastEdit
-			delta = append(delta, NoteDeltaElement{"set-ts", path, timestamps})
 		}
+		delta = append(delta, NoteDeltaElement{"set-ts", path, timestamps})
 	}
 	return delta
 }
