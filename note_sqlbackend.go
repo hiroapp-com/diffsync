@@ -171,6 +171,8 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		// given that he retained all intofmation (note-id etc) and implemented the
 		// protocoll
 		result.Taint(Resource{Kind: "note", ID: nid})
+		// notify removed peer that he has lost a note
+		result.Taint(Resource{Kind: "folio", ID: patch.Path})
 	case "set-seen":
 		// patch.Path contains UID of peer who has seen stuff
 		// patch.Value empty
