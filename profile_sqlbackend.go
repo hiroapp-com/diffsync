@@ -28,7 +28,8 @@ func (backend ProfileSQLBackend) Get(uid string) (ResourceValue, error) {
 		return nil, err
 	}
 	profile.User = u
-	// load contacts
+	// load contacts from either contacts table and also gather all users we
+	// share a note with
 	rows, err := backend.db.Query(`SELECT u.uid,
 									      u.tmp_uid,
 										  u.name as user_name,
@@ -36,10 +37,17 @@ func (backend ProfileSQLBackend) Get(uid string) (ResourceValue, error) {
 										  c.name as contact_name,
 										  c.email,
 										  c.phone
-									FROM contacts as c
-									LEFT JOIN users as u 
-										ON u.uid = c.contact_uid
-									WHERE c.uid = ? and u.tier <> 0`, uid)
+									FROM users as u
+									LEFT OUTER JOIN contacts as c
+									  ON c.contact_uid = u.uid AND c.uid = ?
+									WHERE 
+										c.uid is not null
+										OR u.uid in (SELECT nr.uid 
+													  FROM noterefs as nr
+													  LEFT OUTER JOIN noterefs as nr2
+													    ON nr.nid = nr2.nid AND nr2.uid = ?
+													  WHERE nr.uid <> ? AND nr2.uid is not null)`, uid, uid, uid)
+
 	if err != nil {
 		return nil, err
 	}
