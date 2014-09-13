@@ -11,3 +11,4 @@ sqlite3 $HIRODB < notes.sql
 sqlite3 $HIRODB < noterefs.sql
 sqlite3 $HIRODB < sessions.sql
 sqlite3 $HIRODB < tokens.sql
+sqlite3 $HIRODB < stripe_tokens.sql
