@@ -88,11 +88,15 @@ func (store *SQLSessions) subsByQuery(res Resource, qry string, args ...interfac
 	}
 	defer rows.Close()
 	subs := []subscription{}
+	resetResID := (res.ID == "")
 	for rows.Next() {
 		var sid, uid string
 		err := rows.Scan(&sid, &uid)
 		if err != nil {
 			return nil, err
+		}
+		if resetResID {
+			res.ID = uid
 		}
 		subs = append(subs, subscription{sid: sid, uid: uid, res: res})
 	}
@@ -109,20 +113,15 @@ func (store *SQLSessions) GetSubscriptions(res Resource) ([]subscription, error)
 		return store.subsByQuery(res, "SELECT sid, uid FROM sessions WHERE uid = ?", res.ID)
 	case "profile":
 		// first get all session of this profile's user
-		subs, err := store.subsByQuery(res, "SELECT sid, uid FROM sessions WHERE uid = ?", res.ID)
-		if err != nil {
-			return nil, err
-		}
-		// now also update
-		contactSubs, err := store.subsByQuery(res, "SELECT sid, uid FROM sessions WHERE uid IN (SELECT uid FROM contacts WHERE contact_uid = ?)", res.ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, sub := range contactSubs {
-			sub.res.ID = sub.uid
-			subs = append(subs, sub)
-		}
-		return subs, nil
+		return store.subsByQuery(Resource{Kind: "profile"}, `SELECT sid, uid 
+										                      FROM sessions 
+									                          WHERE uid = ?
+										                        OR uid in (SELECT uid FROM contacts WHERE contact_uid = ?)
+										                        OR uid in (SELECT nr.uid 
+										                     		      FROM noterefs as nr
+										                     				 LEFT OUTER JOIN noterefs as nr2
+										                     				  ON nr.nid = nr2.nid AND nr2.uid = ?
+										                     			  WHERE nr.uid <> ? AND nr2.uid is not null)`, res.ID, res.ID, res.ID)
 	}
 	return []subscription{}, nil
 }
