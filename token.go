@@ -107,6 +107,8 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 			return nil, err
 		} else if changed {
 			event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "note", ID: token.NID}, ctx: event.ctx})
+			// new user got all note's peers as contacts. communicate new contacts to uid and all new contacts
+			event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "profile", ID: uid}, ctx: event.ctx})
 		}
 	}
 	// merge old session's data
@@ -166,6 +168,11 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 		}
 	}
 
+	// re-load profile
+	if err := store.Load(&profile); err != nil {
+		return nil, err
+	}
+
 	// Finally, load users folio
 	folio := Resource{Kind: "folio", ID: uid}
 	if err := store.Load(&folio); err != nil {
@@ -180,7 +187,12 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 			return nil, err
 		}
 		session.shadows = append(session.shadows, NewShadow(res))
+		// make sure all other session.uid's sessions will get any merged notes
+		event.ctx.brdcast.Handle(Event{Name: "res-reset", Res: res, ctx: event.ctx})
+		event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: res, ctx: event.ctx})
 	}
+	// might be that session.uid got a new note from the anon session. taint their folio to make sure it gets propagated
+	event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "folio", ID: session.uid}, ctx: event.ctx})
 	if err = tok.sessions.Save(session); err != nil {
 		return nil, err
 	}
