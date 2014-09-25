@@ -96,6 +96,7 @@ func (shadow *Shadow) SyncIncoming(edit Edit, result *SyncResult, ctx Context) e
 	}
 	shadow.res.Value = newres
 	shadow.backup = newres
+	shadow.Checkpoint()
 	shadow.IncCv()
 	// send patches to store
 	for i := range patches {
