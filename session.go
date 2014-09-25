@@ -311,6 +311,7 @@ func (sess *Session) push_client(event Event) (sent bool) {
 		sess.client = nil
 		return false
 	}
+	log.Printf("session[%s]: PUSH %s", sess.sid[:6], event)
 	return true
 }
 

@@ -14,12 +14,10 @@ func NewJsonAdapter() MessageAdapter {
 }
 
 func (a jsonAdapter) MsgToEvent(from []byte) (Event, error) {
-	log.Printf("jsonAdapter: parsing message: %s\n", from)
 	err := json.Unmarshal(from, &a.buf)
 	if err != nil {
 		return Event{}, err
 	}
-	log.Printf("jsonAdapter: parsed object %v\n", a.buf)
 	ev := Event{
 		Name:  a.buf.Name,
 		SID:   a.buf.SID,
@@ -123,16 +121,13 @@ type jsonMsg struct {
 
 var deltas = map[string]func([]byte) (Delta, error){
 	"note": func(from []byte) (Delta, error) {
-		log.Printf("jsonAdapter: parsing note delta\n")
 		delta := NoteDelta{}
 		if err := json.Unmarshal(from, &delta); err != nil {
 			return nil, err
 		}
-		log.Println("jsonAdapter: parsed note delta", delta)
 		return delta, nil
 	},
 	"folio": func(from []byte) (Delta, error) {
-		log.Printf("jsonAdapter: parsing folio delta\n")
 		delta := FolioDelta{}
 		if err := json.Unmarshal(from, &delta); err != nil {
 			return nil, err
@@ -140,7 +135,6 @@ var deltas = map[string]func([]byte) (Delta, error){
 		return delta, nil
 	},
 	"profile": func(from []byte) (Delta, error) {
-		log.Printf("jsonAdapter: parsing profile delta\n")
 		delta := ProfileDelta{}
 		if err := json.Unmarshal(from, &delta); err != nil {
 			return nil, err
