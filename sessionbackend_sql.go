@@ -121,7 +121,7 @@ func (store *SQLSessions) GetSubscriptions(res Resource) ([]subscription, error)
 										                     		      FROM noterefs as nr
 										                     				 LEFT OUTER JOIN noterefs as nr2
 										                     				  ON nr.nid = nr2.nid AND nr2.uid = ?
-										                     			  WHERE nr.uid <> ? AND nr2.uid is not null)`, res.ID, res.ID, res.ID)
+										                     			  WHERE nr.uid <> ? AND nr2.uid is not null)`, res.ID, res.ID, res.ID, res.ID)
 	}
 	return []subscription{}, nil
 }
