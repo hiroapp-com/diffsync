@@ -23,7 +23,7 @@ type User struct {
 	Phone         string     `json:"phone,omitempty"`
 	PhoneStatus   string     `json:"email_status"`
 	Plan          string     `json:"plan,omitempty"`
-	Tier          int64      `json:"tier,omitempty"`
+	Tier          int64      `json:"tier"`
 	SignupAt      *time.Time `json:"signup_at,omitempty"`
 	CreatedAt     *time.Time `json:"-"`
 	tmpUID        string     `json:"-"`
