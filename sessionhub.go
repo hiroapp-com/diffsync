@@ -79,11 +79,11 @@ func (hub *SessionHub) Broadcast(event Event) error {
 	log.Println("sessionhub(bcast): got ", event)
 	// filter out broadcast'able events
 	switch event.Name {
-	case "res-taint", "res-reset":
+	case "res-taint", "res-reset", "client-gone":
 	default:
 		return InvalidEventError{}
 	}
-	if event.SID != "" {
+	if event.SID != "" || event.Name == "client-gone" {
 		// addressed directly to a certain session, pipe into Router
 		// TODO(flo) is this still necessary? will after the refactor not every holder
 		//   a (former) notifylistener, also have Route() at hand?

@@ -216,13 +216,15 @@ func (sess *Session) handle_reset(event Event) {
 
 func (sess *Session) handle_session_create(event Event) {
 	event.Session = sess
-	if event.ctx.sid != "" {
+	if event.ctx.sid != sess.sid {
 		// the response to a session-create which was triggered
 		// by anothoer session (e.g. anon(sid)->login(token))
 		// should address the "old" sid in the Event.
 		// The client will receive the new sid for further actions
 		// when he takes over the new Event.Session payload
 		event.SID = event.ctx.sid
+		// tell old session-handler that he should not use its client anymore
+		event.ctx.brdcast.Handle(Event{SID: event.ctx.sid, Name: "client-gone", ctx: event.ctx})
 	}
 	sess.push_client(event)
 }
