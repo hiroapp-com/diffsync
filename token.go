@@ -113,39 +113,8 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 	}
 	// merge old session's data
 	if event.SID != "" {
-		oldSession, err := tok.hub.Snapshot(event.SID, event.ctx)
-		switch err := err.(type) {
-		default:
+		if err = tok.stealNoteRef(event.SID, uid, event.ctx); err != nil {
 			return nil, err
-		case ResponseTimeoutErr:
-			// we couldn't load the sessin due to
-			// slow/unresponsive session. if we ignore this,
-			// old session data might get lost.
-			// instead, fail hard and let the client retry later
-			log.Printf("token: FATAL backend timed out during snapshot request. sid: `%s`", event.SID)
-			return nil, err
-		case SessionIDInvalidErr:
-			// provided SID is (for some reason) considered invalid
-			// we will simply ignore the sid and not import any data,
-			// but proceed normally
-		case nil:
-		}
-		sessProfile := Resource{Kind: "profile", ID: oldSession.uid}
-		if err = store.Load(&sessProfile); err != nil {
-			return nil, err
-		}
-		if sessProfile.Value.(Profile).User.Tier == 0 {
-			// only merge data from anon sessions
-			for _, shadow := range oldSession.shadows {
-				// only extract notes
-				if shadow.res.Kind == "note" {
-					if changed, err := tok.stealNoteRef(oldSession.uid, uid, shadow.res.ID); err != nil {
-						return nil, err
-					} else if changed {
-						event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "note", ID: shadow.res.ID}, ctx: event.ctx})
-					}
-				}
-			}
 		}
 	}
 	// TODO(flo) if kind == share-email, share-phone: load invite-users notes
@@ -165,6 +134,7 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 		}
 		for i := range newNIDs {
 			event.ctx.brdcast.Handle(Event{Name: "res-reset", Res: Resource{Kind: "note", ID: newNIDs[i]}, ctx: event.ctx})
+			event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "note", ID: newNIDs[i]}, ctx: event.ctx})
 		}
 	}
 
@@ -267,16 +237,52 @@ func (tok *TokenConsumer) addNoteRef(uid, nid string) (changed bool, err error) 
 	return (numChanges > 0), nil
 }
 
-func (tok *TokenConsumer) stealNoteRef(from_uid, to_uid, nid string) (changed bool, err error) {
-	// TODO mayb we can refactor this part to instead of directly modifying the DB
-	// we send an appropriate add-noteref patch down the wire to the folio-store and let the
-	// machinery do the rest
-	res, err := tok.db.Exec("UPDATE noterefs SET uid = ? WHERE nid = ? AND uid = ?", to_uid, nid, from_uid)
-	if err != nil {
-		return false, err
+func (tok *TokenConsumer) stealNoteRef(sid, uid string, ctx Context) error {
+	s, err := tok.hub.Snapshot(sid, ctx)
+	switch err := err.(type) {
+	case ResponseTimeoutErr:
+		// we couldn't load the sessin due to
+		// slow/unresponsive session. if we ignore this,
+		// old session data might get lost.
+		// instead, fail hard and let the client retry later
+		log.Printf("token: FATAL backend timed out during snapshot request. sid: `%s`", sid)
+		return err
+	case SessionIDInvalidErr:
+		// provided SID is (for some reason) considered invalid
+		// we will simply ignore the sid and not import any data,
+		// but proceed normally
+	default:
+		return err
+	case nil:
+		// no error, continue
 	}
-	numChanges, _ := res.RowsAffected()
-	return (numChanges > 0), nil
+	p := Resource{Kind: "profile", ID: s.uid}
+	if err = ctx.store.Load(&p); err != nil {
+		return err
+	}
+	if p.Value.(Profile).User.Tier == 0 {
+		// only merge data from anon sessions
+		res := NewSyncResult()
+		for _, shadow := range s.shadows {
+			// only extract notes
+			if shadow.res.Kind == "note" {
+				if err = ctx.store.Patch(shadow.res, Patch{Op: "change-peer-uid", Path: s.uid, Value: uid}, res, ctx); err != nil {
+					return err
+				}
+			}
+		}
+		if len(res.tainted) > 0 {
+			ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "folio", ID: uid}, ctx: ctx})
+			// n.b. we're omitting the res-taint for the previous owner's folio here.
+			// this method is supposed to be used for takeover of anon-session's notes
+			// on login/signup so the old session and user get discarded and never used again.
+			for _, res := range res.tainted {
+				ctx.brdcast.Handle(Event{Name: "res-reset", Res: res, ctx: ctx})
+				ctx.brdcast.Handle(Event{Name: "res-taint", Res: res, ctx: ctx})
+			}
+		}
+	}
+	return nil
 }
 
 func (tok *TokenConsumer) verifyID(uid, kind, to_verify string) error {

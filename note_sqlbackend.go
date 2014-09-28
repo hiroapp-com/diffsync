@@ -184,6 +184,17 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
 		result.Taint(Resource{Kind: "note", ID: nid})
+	case "change-peer-uid":
+		// patch.Path contains old peer's UID
+		// patch.Value new peer's UID
+		// patch.OldValue empty
+		res, err := backend.db.Exec("UPDATE noterefs SET uid = ? WHERE nid = ? AND uid = ?", patch.Value, nid, patch.Path)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			result.Taint(Resource{Kind: "note", ID: nid})
+		}
 	}
 	return nil
 }

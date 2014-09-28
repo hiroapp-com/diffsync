@@ -85,9 +85,9 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, result *SyncResult
 		// TODO(flo) check permissin?
 		// fire and forgeeeeet
 		backend.db.Exec("UPDATE noterefs SET tmp_nid = ?, status = ?, role = ? WHERE uid = ? and nid = ?", noteref.tmpNID, noteref.Status, role, uid, noteref.NID)
+		result.Taint(Resource{Kind: "folio", ID: uid})
 		result.Reset(Resource{Kind: "note", ID: noteref.NID})
 		result.Taint(Resource{Kind: "note", ID: noteref.NID})
-		result.Taint(Resource{Kind: "folio", ID: uid})
 	}
 	return nil
 }
