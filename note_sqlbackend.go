@@ -131,7 +131,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", user.UID, ctx.uid)
 		//TODO(flo) add contact for every other user what accesses given note OR calculate contacts
 		//			from contacts and noterefs in profilebackend.get?
-		res, err := backend.db.Exec("INSERT INTO noterefs (nid, uid, role) VALUES(?, ?, 'invited')", nid, user.UID)
+		res, err := backend.db.Exec("INSERT INTO noterefs (nid, uid, role, status) VALUES(?, ?, 'invited', 'active')", nid, user.UID)
 		if err != nil {
 			return fmt.Errorf("could not create note-ref for invitee: nid: %s, uid: %s", nid, user.UID)
 		}
@@ -140,6 +140,8 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		}
 		// taint profile so its and it's contact's contact lists get updated
 		result.Taint(Resource{Kind: "profile", ID: ctx.uid})
+		// update invitee's folio
+		result.Taint(Resource{Kind: "folio", ID: user.UID})
 		// reset so SID gets shadow
 		result.Reset(Resource{Kind: "note", ID: nid})
 		// taint to all others get the peers update
