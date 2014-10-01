@@ -273,12 +273,10 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 	var err error
 	switch addr, addrKind := rcpt.Addr(); addrKind {
 	case "phone":
-		reqData["inviter_name"] = firstNonEmpty(inviter.Name, inviter.Phone, inviter.Email, "Anonymous")
-		reqData["inviter_addr"] = firstNonEmpty(inviter.Phone, inviter.Email, "number unknown")
+		reqData["inviter_name"] = firstNonEmpty(inviter.Name, "Anonymous")
 		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, phone) VALUES (?, 'share', ?, ?, ?)", hashed, user.UID, nid, addr)
 	case "email":
-		reqData["inviter_name"] = firstNonEmpty(inviter.Name, inviter.Email, inviter.Phone, "Anonymous")
-		reqData["inviter_addr"] = firstNonEmpty(inviter.Email, inviter.Phone, "email unknown")
+		reqData["inviter_name"] = firstNonEmpty(inviter.Name, "Anonymous")
 		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, email) VALUES (?, 'share', ?, ?, ?)", hashed, user.UID, nid, addr)
 	default:
 		log.Printf("warn: cannot invite user[%s]. no usable contanct-addr found", user.UID)
@@ -298,11 +296,11 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 		note = res.Value.(Note)
 	}
 	if len(note.Text) > 500 {
-		reqData["note_peek"] = string(note.Text)[:500]
+		reqData["peek"] = string(note.Text)[:500]
 	} else {
-		reqData["note_peek"] = string(note.Text)
+		reqData["peek"] = string(note.Text)
 	}
-	reqData["note_title"] = note.Title
+	reqData["title"] = note.Title
 	reqData["num_peers"] = strconv.Itoa(len(note.Peers))
 	req := comm.NewRequest("invite", rcpt, reqData)
 	if err = ctx.store.commHandler(req); err != nil {
