@@ -16,8 +16,7 @@ func TestUserSerialize(t *testing.T) {
 		Phone:       "+100012345",
 		EmailStatus: "verified",
 		PhoneStatus: "unverified",
-		Plan:        "starter",
-		Tier:        1,
+		Tier:        2,
 		SignupAt:    &ts,
 	}
 	res, err := json.Marshal(user)
@@ -30,8 +29,7 @@ func TestUserSerialize(t *testing.T) {
 			assert.Equal(t, "+100012345", user.Phone, "phone mismatch after serializaion")
 			assert.Equal(t, "verified", user.EmailStatus, "email_status mismatch after serializaion")
 			assert.Equal(t, "unverified", user.PhoneStatus, "phone_status mismatch after serializaion")
-			assert.Equal(t, "starter", user.Plan, "plan mismatch after serializaion")
-			assert.Equal(t, 1, user.Tier, "tier mismatch after serializaion")
+			assert.Equal(t, 2, user.Tier, "tier mismatch after serializaion")
 			assert.Equal(t, ts, *user.SignupAt, "signup_at mismatch after serializaion")
 		}
 	}

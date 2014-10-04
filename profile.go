@@ -22,7 +22,6 @@ type User struct {
 	EmailStatus   string     `json:"email_status"`
 	Phone         string     `json:"phone,omitempty"`
 	PhoneStatus   string     `json:"email_status"`
-	Plan          string     `json:"plan,omitempty"`
 	Tier          int64      `json:"tier"`
 	SignupAt      *UnixTime  `json:"signup_at,omitempty"`
 	CreatedAt     *time.Time `json:"-"`
@@ -121,14 +120,14 @@ func (prof Profile) Clone() ResourceValue {
 }
 
 func (prof Profile) String() string {
-	return fmt.Sprintf("<profile uid: %s, email: %s/%s, phone: %s/%s, name: %s, plan: %s, signup: %s, contacts: %s",
+	return fmt.Sprintf("<profile uid: %s, email: %s/%s, phone: %s/%s, name: %s, tier: %s, signup: %s, contacts: %s",
 		prof.User.UID,
 		prof.User.Email,
 		prof.User.EmailStatus,
 		prof.User.Phone,
 		prof.User.PhoneStatus,
 		prof.User.Name,
-		prof.User.Plan,
+		prof.User.Tier,
 		prof.User.SignupAt,
 		prof.Contacts,
 	)
@@ -165,8 +164,8 @@ func (prof Profile) GetDelta(latest ResourceValue) Delta {
 	if master.User.Phone != prof.User.Phone {
 		delta = append(delta, UserChange{"set-phone", userPath, master.User.Phone})
 	}
-	if master.User.Plan != prof.User.Plan {
-		delta = append(delta, UserChange{"set-plan", userPath, master.User.Plan})
+	if master.User.Tier != prof.User.Tier {
+		delta = append(delta, UserChange{"set-tier", userPath, master.User.Tier})
 	}
 	// pupulate lookup objects of old versions
 	oldExisting := map[string]User{}

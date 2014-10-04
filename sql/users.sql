@@ -2,7 +2,6 @@ CREATE TABLE "users" (
     uid text PRIMARY KEY,
     name text default "",
     tier integer default 0,
-    plan text default "",
     plan_expires_at timestamp default NULL,
     email text default "",
     email_status text default "",

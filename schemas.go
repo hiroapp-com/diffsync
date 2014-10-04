@@ -13,7 +13,6 @@ const (
 			uid text PRIMARY KEY,
 			name text default "",
 			tier integer default 0,
-			plan text default "",
 			email text default "",
 			email_status text default "",
 			phone text default "",
