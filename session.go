@@ -103,6 +103,8 @@ func (sess *Session) Handle(event Event) {
 		sess.handle_token_consume(event)
 	case "res-add":
 		sess.handle_add(event)
+	case "res-remove":
+		sess.handle_remove(event)
 	case "res-sync":
 		sess.handle_sync(event)
 	case "client-ehlo":
@@ -214,6 +216,10 @@ func (sess *Session) handle_taint(event Event) {
 
 func (sess *Session) handle_add(event Event) {
 	sess.addShadow(event.Res, event.ctx)
+}
+
+func (sess *Session) handle_remove(event Event) {
+	sess.removeShadow(event.Res, event.ctx)
 }
 
 func (sess *Session) handle_session_create(event Event) {
@@ -407,6 +413,17 @@ func (sess *Session) addShadow(res Resource, ctx Context) {
 	// official place to define empty resource values
 	log.Printf("session[%s]: storing new blank resource in shadows %s", sess.sid[:6], res.StringRef())
 	sess.shadows = append(sess.shadows, NewShadow(res))
+}
+
+func (sess *Session) removeShadow(res Resource, ctx Context) {
+	for i := range sess.shadows {
+		if res.SameRef(sess.shadows[i].res) {
+			sess.shadows[i] = sess.shadows[len(sess.shadows)-1]
+			sess.shadows[len(sess.shadows)-1] = nil
+			sess.shadows = sess.shadows[:len(sess.shadows)-1]
+			return
+		}
+	}
 }
 
 func (sess *Session) getShadow(res Resource) (*Shadow, bool) {
