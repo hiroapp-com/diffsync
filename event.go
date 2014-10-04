@@ -47,7 +47,6 @@ type Event struct {
 	// different parts of the infrastructure might respond to
 	// them or route them into a receivers direction
 	//
-	// Currently the following Name's are in use: session-ceate, res-sync, res-reset, res-taint
 	Name string `json:"name"`
 
 	// SID contains the session-id which this Event is associated to.
@@ -56,6 +55,9 @@ type Event struct {
 	// by te notifying mechanism. If a session's operation caused any notifications to be
 	// broadcast to other sessions/users, the SID will indicate the origin SID
 	SID string `json:"sid"`
+
+	// TODO(documentation)
+	UID string `json:"uid"`
 
 	// A simple request/response Tag
 	//
