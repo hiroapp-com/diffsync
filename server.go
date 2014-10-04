@@ -28,7 +28,7 @@ func NewServer(db *sql.DB, handler comm.Handler) (*Server, error) {
 func (srv *Server) Handle(event Event) error {
 	event.ctx.ts = time.Now()
 	event.ctx.store = srv.Store
-	event.ctx.brdcast = BroadcastHandler{srv.sessionHub}
+	event.ctx.Router = RouteHandler{srv.sessionHub}
 	return srv.tokenConsumer.Handle(event, RouteHandler{srv.sessionHub})
 }
 

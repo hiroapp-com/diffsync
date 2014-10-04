@@ -30,7 +30,8 @@ func (backend ProfileSQLBackend) Get(uid string) (ResourceValue, error) {
 	profile.User = u
 	// load contacts from either contacts table and also gather all users we
 	// share a note with
-	rows, err := backend.db.Query(`SELECT u.uid,
+	rows, err := backend.db.Query(`SELECT DISTINCT 
+										  u.uid,
 									      u.tmp_uid,
 										  u.name as user_name,
 										  u.tier,
@@ -42,7 +43,7 @@ func (backend ProfileSQLBackend) Get(uid string) (ResourceValue, error) {
 									  ON c.contact_uid = u.uid AND c.uid = ?
 									WHERE 
 										c.uid is not null
-										OR u.uid in (SELECT nr.uid 
+									 OR u.uid in (SELECT nr.uid 
 													  FROM noterefs as nr
 													  LEFT OUTER JOIN noterefs as nr2
 													    ON nr.nid = nr2.nid AND nr2.uid = ?
@@ -69,6 +70,22 @@ func (backend ProfileSQLBackend) Get(uid string) (ResourceValue, error) {
 	return profile, nil
 }
 
+func createContact(uid1, uid2, name, email, phone string, db *sql.DB, ctx Context) (err error) {
+	if _, err = db.Exec("INSERT INTO contacts (uid, contact_uid, name, email, phone) VALUES(?, ?, ?, ?, ?)", uid1, uid2, name, email, phone); err != nil {
+		return
+	}
+	if _, err = db.Exec("INSERT INTO contacts (uid, contact_uid) VALUES(?, ?)", uid2, uid1); err != nil {
+		return
+	}
+	if err = ctx.Router.Handle(Event{UID: uid1, Name: "res-sync", Res: Resource{Kind: "profile", ID: uid1}}); err != nil {
+		return
+	}
+	if err = ctx.Router.Handle(Event{UID: uid2, Name: "res-sync", Res: Resource{Kind: "profile", ID: uid2}}); err != nil {
+		return
+	}
+	return nil
+}
+
 func (backend ProfileSQLBackend) Patch(uid string, patch Patch, result *SyncResult, ctx Context) error {
 	log.Printf("received Profile-Patch: %#v", patch)
 	switch patch.Op {
@@ -80,21 +97,77 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, result *SyncResu
 			// noop
 			return nil
 		}
-		userRef := patch.Value.(User)
-		if userRef.Email != "" {
-			userRef.EmailStatus = "invited"
+		ref := patch.Value.(User)
+		if len(ref.UID) == 8 {
+			// official UID provided, ignore everything else
+			u, err := findUserByUID(backend.db, ref.UID)
+			if err != nil {
+				return err
+			}
+			if u != nil {
+				// when adding a user via UID we won't save any user supplied info (e.g. name, email nor phone)
+				return createContact(uid, ref.UID, "", "", "", backend.db, ctx)
+			}
 		}
-		if userRef.Phone != "" {
-			userRef.PhoneStatus = "invited"
+		if ref.Email == "" && ref.Phone == "" {
+			return fmt.Errorf("no useful info provided for add-contact. need either uid, email or phone")
 		}
-		user, _, err := getOrCreateUser(userRef, backend.db)
-		if err != nil {
-			return err
+		var u1, u2 *User
+		var err error
+		if ref.Email != "" {
+			u1, err = findUserByEmail(backend.db, ref.Email)
+			if err != nil {
+				return err
+			}
 		}
-		// create contact, fire and forget
-		backend.db.Exec("INSERT INTO contacts (uid, contact_uid, name, email, phone) VALUES(?, ?, ?, ?, ?)", uid, user.UID, user.Name, user.Email, user.Phone)
-		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", user.UID, uid)
-		result.Taint(Resource{Kind: "profile", ID: uid})
+		if ref.Phone != "" {
+			u2, err = findUserByPhone(backend.db, ref.Phone)
+			if err != nil {
+				return err
+			}
+		}
+		if u1 == nil && u2 == nil {
+			// none found in db, create new one
+			if err = createInvitedUser(backend.db, &ref); err != nil {
+				return err
+			}
+			return createContact(uid, ref.UID, ref.Name, ref.Email, ref.Phone, backend.db, ctx)
+		}
+		if u1 != nil && u2 != nil {
+			// found both via email and phone
+			if u1.UID == u2.UID {
+				// and they are associated to the same user, sweet! save contact
+				return createContact(uid, u1.UID, ref.Name, ref.Email, ref.Phone, backend.db, ctx)
+			} else {
+				// well we found 2 proper seperate users with those creds. give me both contacts
+				if err = createContact(uid, u1.UID, ref.Name, ref.Email, "", backend.db, ctx); err != nil {
+					return err
+				}
+				return createContact(uid, u2.UID, ref.Name, "", ref.Phone, backend.db, ctx)
+			}
+		}
+		// now only one - u1 or u2 - are non-nil. check which one and save it as a contact
+		if u1 != nil {
+			if err = createContact(uid, u1.UID, ref.Name, ref.Email, "", backend.db, ctx); err != nil {
+				return err
+			}
+			ref.UID = ""
+			ref.Email = ""
+			if err = createInvitedUser(backend.db, &ref); err != nil {
+				return err
+			}
+			return createContact(uid, ref.UID, ref.Name, "", ref.Phone, backend.db, ctx)
+		} else if u2 != nil {
+			if err = createContact(uid, u2.UID, ref.Name, "", ref.Phone, backend.db, ctx); err != nil {
+				return err
+			}
+			ref.UID = ""
+			ref.Phone = ""
+			if err = createInvitedUser(backend.db, &ref); err != nil {
+				return err
+			}
+			return createContact(uid, ref.UID, ref.Name, ref.Email, "", backend.db, ctx)
+		}
 	case "set-name":
 		// patch.Path empty (i.e. only setting own name supported for now)
 		// patch.Value contains the new Name
@@ -135,14 +208,15 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, result *SyncResu
 		if err != nil {
 			return err
 		}
-		result.Taint(Resource{Kind: "profile", ID: uid})
+		result.Tainted(Resource{Kind: "profile", ID: uid})
 	}
 	return nil
 }
 
-func (backend ProfileSQLBackend) CreateEmpty(ctx Context) (string, error) {
-	user, _, err := getOrCreateUser(User{createdForSID: ctx.sid}, backend.db)
-	return user.UID, err
+func (backend ProfileSQLBackend) CreateEmpty(ctx Context) (uid string, err error) {
+	uid = generateUID()
+	_, err = backend.db.Exec("INSERT INTO users (uid, tier, created_for_sid) values (?, ?, ?)", uid, 0, ctx.sid)
+	return
 }
 
 func (backend ProfileSQLBackend) sendVerifyToken(uid string, rcpt comm.Rcpt, store *Store) {
@@ -169,48 +243,50 @@ func (backend ProfileSQLBackend) sendVerifyToken(uid string, rcpt comm.Rcpt, sto
 	}
 }
 
-func getOrCreateUser(userRef User, db *sql.DB) (user User, created bool, err error) {
-	txn, err := db.Begin()
-	if err != nil {
-		return
-	}
-	var row *sql.Row
-	switch {
-	case userRef.UID != "":
-		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where uid = ?", userRef.UID)
-	case userRef.Email != "" && userRef.Phone != "":
-		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where (email = ? AND email_status IN ('verified', 'invited')) OR (phone = ? AND phone_status IN ('verified', 'invited'))", userRef.Email, userRef.Phone)
-	case userRef.Email != "":
-		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where email = ? AND phone_status IN ('verified', 'invited')", userRef.Email)
-	case userRef.Phone != "":
-		row = db.QueryRow("SELECT uid, name, email, phone, plan, signup_at from users where phone = ? AND phone_status IN ('verified', 'invited')", userRef.Phone)
-	default:
-	}
-	user = User{}
-	if row == nil {
-		err = sql.ErrNoRows
-	} else {
-		err = row.Scan(&user.UID, &user.Name, &user.Email, &user.Phone, &user.Plan, &user.SignupAt)
-	}
+func findUserByUID(db *sql.DB, uid string) (*User, error) {
+	return findUserByQuery(db, "uid = ?", uid)
+}
+
+func findUserByEmail(db *sql.DB, email string) (*User, error) {
+	return findUserByQuery(db, "email = ? AND NOT (email_status = 'unverified' AND tier > 0)", email)
+}
+
+func findUserByPhone(db *sql.DB, phone string) (*User, error) {
+	return findUserByQuery(db, "phone = ? AND NOT (phone_status = 'unverified' AND tier > 0)", phone)
+}
+
+func findUserByQuery(db *sql.DB, where string, args ...interface{}) (*User, error) {
+	u := User{}
+	row := db.QueryRow("SELECT uid, name, email, email_status, phone, phone_status, tier, signup_at from users where "+where, args...)
+	err := row.Scan(&u.UID, &u.Name, &u.Email, &u.EmailStatus, &u.Phone, &u.PhoneStatus, &u.Tier, &u.SignupAt)
 	if err == sql.ErrNoRows {
-		// not found, lets create it
-		// copy data over from reference
-		user = userRef
-		user.tmpUID = user.UID
-		user.UID = generateUID()
-		_, err = txn.Exec("INSERT INTO users (uid, tmp_uid, tier, name, email, phone, email_status, phone_status, created_for_sid) values (?, ?, ?, ?, ?, ?, ?, ?, ?)", user.UID, user.tmpUID, user.Tier, user.Name, user.Email, user.Phone, user.EmailStatus, user.PhoneStatus, user.createdForSID)
-		if err != nil {
-			txn.Rollback()
-			log.Printf("error while creatting new user: %s\n", err)
-			return
-		}
-		created = true
+		return nil, nil
 	} else if err != nil {
-		txn.Rollback()
-		log.Printf("error while fetching existing user: %s\n", err)
-		return
+		return nil, err
 	}
-	txn.Commit()
+	return &u, nil
+}
+
+func createInvitedUser(db *sql.DB, ref *User) (err error) {
+	ref.tmpUID = ref.UID
+	ref.UID = generateUID()
+	if ref.Email != "" {
+		ref.EmailStatus = "unverified"
+	}
+	if ref.Phone != "" {
+		ref.PhoneStatus = "unverified"
+	}
+	_, err = db.Exec("INSERT INTO users (uid, tmp_uid, tier, name, email, phone, email_status, phone_status, created_for_sid) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		ref.UID,
+		ref.tmpUID,
+		-1,
+		ref.Name,
+		ref.Email,
+		ref.Phone,
+		ref.EmailStatus,
+		ref.PhoneStatus,
+		ref.createdForSID,
+	)
 	return
 }
 

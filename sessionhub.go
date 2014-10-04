@@ -16,17 +16,13 @@ type SessionHub struct {
 	backend     SessionBackend
 }
 
-type subscription struct {
-	sid string
-	uid string
-	res Resource
+type TimeoutError struct {
+	Msg string
 }
-
-type HubTimeoutError struct{}
 type InvalidEventError struct{}
 
-func (err HubTimeoutError) Error() string {
-	return "Routing an event timed out. sesisonhub not responding"
+func (err TimeoutError) Error() string {
+	return fmt.Sprintf("timeout: %s", err.Msg)
 }
 
 func (err InvalidEventError) Error() string {
@@ -44,15 +40,9 @@ func (err ResponseTimeoutErr) Error() string {
 type RouteHandler struct {
 	hub *SessionHub
 }
-type BroadcastHandler struct {
-	hub *SessionHub
-}
 
 func (handler RouteHandler) Handle(event Event) error {
 	return handler.hub.Route(event)
-}
-func (handler BroadcastHandler) Handle(event Event) error {
-	return handler.hub.Broadcast(event)
 }
 
 func NewSessionHub(backend SessionBackend) *SessionHub {
@@ -66,40 +56,52 @@ func NewSessionHub(backend SessionBackend) *SessionHub {
 	}
 }
 
-func (hub *SessionHub) Route(event Event) error {
+func feedInbox(ch chan<- Event, e Event) error {
 	select {
-	case hub.inbox <- event:
+	case ch <- e:
 		return nil
 	case <-time.After(5 * time.Second):
-		return HubTimeoutError{}
+		// ROLLUP
+		return TimeoutError{"sessionhub inbox not responding whithin time"}
 	}
 }
 
-func (hub *SessionHub) Broadcast(event Event) error {
-	log.Println("sessionhub(bcast): got ", event)
-	// filter out broadcast'able events
-	switch event.Name {
-	case "res-taint", "res-reset", "client-gone":
-	default:
-		return InvalidEventError{}
+func (hub *SessionHub) Route(event Event) error {
+	if event.SID != "" {
+		// send directly to session
+		return feedInbox(hub.inbox, event)
 	}
-	if event.SID != "" || event.Name == "client-gone" {
-		// addressed directly to a certain session, pipe into Router
-		// TODO(flo) is this still necessary? will after the refactor not every holder
-		//   a (former) notifylistener, also have Route() at hand?
-		return hub.Route(event)
-	}
-	subs, err := hub.backend.GetSubscriptions(event.Res)
-	if err != nil {
-		return err
-	}
-	for i := range subs {
-		log.Printf("sessionhub(bcast): routing to session[%s]", subs[i])
-		if err = hub.Route(Event{Name: event.Name, SID: subs[i].sid, Res: subs[i].res, ctx: event.ctx}); err != nil {
+	if event.UID != "" {
+		// forward to user's sessions
+		ss, err := hub.backend.SessionsOfUser(event.UID)
+		if err != nil {
 			return err
 		}
+		for _, sid := range ss {
+			event.SID = sid
+			event.UID = ""
+			if err = hub.Route(event); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	return nil
+	if event.Res != (Resource{}) {
+		// forward to everyone interested in given resource!
+		subs, err := hub.backend.GetSubscriptions(event.Res)
+		if err != nil {
+			return err
+		}
+		for uid, res := range subs {
+			event.UID = uid
+			event.Res = res
+			if err = hub.Route(event); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("no route matched, event could not be routed/delivered: %s", event)
 }
 
 func (hub *SessionHub) Snapshot(sid string, ctx Context) (*Session, error) {
@@ -148,7 +150,7 @@ func (hub *SessionHub) Run() {
 				return
 			}
 			hub.logEvent(event)
-			hub.route(event.SID, event)
+			hub.toSession(event.SID, event)
 		}
 	}
 }
@@ -162,7 +164,7 @@ func (hub *SessionHub) Stop() {
 	// so one close can kill all processes
 }
 
-func (hub *SessionHub) route(sid string, event Event) error {
+func (hub *SessionHub) toSession(sid string, event Event) error {
 	// if session has an active runner, get its inbox
 	inbox, ok := hub.active[sid]
 	if ok {

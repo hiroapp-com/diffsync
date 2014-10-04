@@ -115,37 +115,63 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		//	// never attempt to do this, thus we'll safely ignore the patch
 		//	return nil
 		//}
-		userRef := patch.Value.(User)
-		if userRef.Email != "" {
-			userRef.EmailStatus = "invited"
-		} else if userRef.Phone != "" {
-			userRef.PhoneStatus = "invited"
+		ref := patch.Value.(User)
+		var u *User
+		var err error
+		if len(ref.UID) == 8 {
+			u, err = findUserByUID(backend.db, ref.UID)
+			if err != nil {
+				return err
+			} else if u == nil {
+				// user not found
+				return fmt.Errorf("cannot invite user to note: user not found")
+			}
 		}
-		userRef.Tier = -1
-		user, _, err := getOrCreateUser(userRef, backend.db)
-		if err != nil {
-			return err
+
+		if ref.Email != "" {
+			u, err = findUserByEmail(backend.db, ref.Email)
+			if err != nil {
+				return err
+			}
+			if u == nil {
+				// email provided but not found in DB, create invited user
+				u.Email = ref.Email
+				if err = createInvitedUser(backend.db, u); err != nil {
+					return err
+				}
+			}
+		} else if ref.Phone != "" {
+			u, err = findUserByPhone(backend.db, ref.Phone)
+			if err != nil {
+				return err
+			}
+			if u == nil {
+				// email provided but not found in DB, create invited user
+				u.Phone = ref.Phone
+				if err = createInvitedUser(backend.db, u); err != nil {
+					return err
+				}
+			}
 		}
-		// fire and forgeeeeet
-		backend.db.Exec("INSERT INTO contacts (uid, contact_uid, name, email, phone) VALUES(?, ?, ?, ?, ?)", ctx.uid, user.UID, user.Name, user.Email, user.Phone)
-		backend.db.Exec("INSERT INTO contacts (uid, contact_uid ) VALUES(?, ?)", user.UID, ctx.uid)
-		//TODO(flo) add contact for every other user what accesses given note OR calculate contacts
-		//			from contacts and noterefs in profilebackend.get?
-		res, err := backend.db.Exec("INSERT INTO noterefs (nid, uid, role, status) VALUES(?, ?, 'invited', 'active')", nid, user.UID)
+		if u == nil {
+			panic("NULLUSER WTF?!")
+		}
+		res, err := backend.db.Exec("INSERT INTO noterefs (nid, uid, role, status) VALUES(?, ?, 'invited', 'active')", nid, u.UID)
 		if err != nil {
-			return fmt.Errorf("could not create note-ref for invitee: nid: %s, uid: %s", nid, user.UID)
+			return fmt.Errorf("could not create note-ref for invitee: nid: %s, uid: %s", nid, u.UID)
 		}
 		if affected, _ := res.RowsAffected(); affected > 0 {
-			go backend.sendInvite(user, nid, ctx)
+			go backend.sendInvite(*u, nid, ctx)
+			if err = ctx.Router.Handle(Event{UID: u.UID, Name: "res-add", Res: Resource{Kind: "note", ID: nid}, ctx: ctx}); err != nil {
+				return err
+			}
+			if err = ctx.Router.Handle(Event{UID: u.UID, Name: "res-sync", Res: Resource{Kind: "folio", ID: u.UID}, ctx: ctx}); err != nil {
+				return err
+			}
+			result.Tainted(Resource{Kind: "note", ID: nid})
+			// lastly create contact with provided infos
+			return createContact(ctx.uid, u.UID, ref.Name, ref.Email, ref.Phone, backend.db, ctx)
 		}
-		// taint profile so its and it's contact's contact lists get updated
-		result.Taint(Resource{Kind: "profile", ID: ctx.uid})
-		// update invitee's folio
-		result.Taint(Resource{Kind: "folio", ID: user.UID})
-		// reset so SID gets shadow
-		result.Reset(Resource{Kind: "note", ID: nid})
-		// taint to all others get the peers update
-		result.Taint(Resource{Kind: "note", ID: nid})
 	case "set-cursor":
 		// patch.Path contains UID of peer whose cursor to set
 		// patch.Value contains int64 with new cursor position
@@ -166,6 +192,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if err != nil {
 			return err
 		}
+		ctx.Router.Handle(Event{UID: patch.Path, Name: "res-remove", Res: Resource{Kind: "note", ID: nid}, ctx: ctx})
 		result.Tainted(Resource{Kind: "folio", ID: patch.Path})
 		result.Tainted(Resource{Kind: "note", ID: nid})
 	case "set-seen":
@@ -188,6 +215,8 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 			return err
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
+			ctx.Router.Handle(Event{UID: patch.Value.(string), Name: "res-add", Res: Resource{Kind: "note", ID: nid}, ctx: ctx})
+			ctx.Router.Handle(Event{UID: patch.Path, Name: "res-remove", Res: Resource{Kind: "note", ID: nid}, ctx: ctx})
 			// n.b. we're omitting the res-taint for the previous owner's folio here.
 			// this method is supposed to be used for takeover of anon-session's notes
 			// on login/signup so the old session and user get discarded and never used again.

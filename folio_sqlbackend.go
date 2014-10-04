@@ -49,6 +49,7 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, result *SyncResult
 		if err != nil {
 			return err
 		}
+		ctx.Router.Handle(Event{UID: uid, Name: "res-remove", Res: Resource{Kind: "note", ID: patch.Path}, ctx: ctx})
 		result.Tainted(Resource{Kind: "folio", ID: uid})
 		result.Tainted(Resource{Kind: "note", ID: patch.Path})
 	case "set-status":
@@ -67,26 +68,41 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, result *SyncResult
 	case "add-noteref":
 		// patch.Path empty
 		// patch.Value contains new NoteRef value
-		// patch.OldValue contains old Status for CAS
-		noteref := patch.Value.(NoteRef)
-		// TODO(flo) check if note with ID already exists. for no just checking against tmp ids
-		role := "active"
-		if len(noteref.NID) < 5 {
+		// patch.OldValue empty
+		ref := patch.Value.(NoteRef)
+		var res sql.Result
+		var err error
+		if len(ref.NID) < 5 {
 			// save blank note with new NID
 			newnote, err := ctx.store.NewResource("note", ctx)
 			if err != nil {
 				return err
 			}
-			noteref.tmpNID = noteref.NID
-			noteref.NID = newnote.ID
-			role = "owner"
+			ref.tmpNID = ref.NID
+			ref.NID = newnote.ID
+			if res, err = backend.db.Exec("UPDATE noterefs SET tmp_nid = ?, status = ?, role = 'owner' WHERE uid = ? and nid = ?",
+				ref.tmpNID,
+				ref.Status,
+				uid,
+				ref.NID,
+			); err != nil {
+				return err
+			}
+		} else {
+			// add existing note to folio
+			if res, err = backend.db.Exec("INSERT INTO noterefs (uid, nid, status, role) VALUES (?, ?, 'active', 'active')", uid, ref.NID); err != nil {
+				return err
+			}
 		}
-		// TODO(flo) check permissin?
-		// fire and forgeeeeet
-		backend.db.Exec("UPDATE noterefs SET tmp_nid = ?, status = ?, role = ? WHERE uid = ? and nid = ?", noteref.tmpNID, noteref.Status, role, uid, noteref.NID)
-		result.Taint(Resource{Kind: "folio", ID: uid})
-		result.Reset(Resource{Kind: "note", ID: noteref.NID})
-		result.Taint(Resource{Kind: "note", ID: noteref.NID})
+		if added, _ := res.RowsAffected(); added > 0 {
+			// TODO(flo) check permissin?
+			if err = ctx.Router.Handle(Event{UID: uid, Name: "res-add", Res: Resource{Kind: "note", ID: ref.NID}, ctx: ctx}); err != nil {
+				return err
+			}
+			result.Tainted(Resource{Kind: "profile", ID: uid})
+			result.Tainted(Resource{Kind: "folio", ID: uid})
+			result.Tainted(Resource{Kind: "note", ID: ref.NID})
+		}
 	}
 	return nil
 }

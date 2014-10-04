@@ -5,19 +5,19 @@ import (
 )
 
 type Context struct {
-	sid     string
-	uid     string
-	ts      time.Time
-	store   *Store
-	brdcast EventHandler
-	Client  EventHandler
+	sid    string
+	uid    string
+	ts     time.Time
+	store  *Store
+	Router EventHandler
+	Client EventHandler
 }
 
-func NewContext(brdcast EventHandler, store *Store, client EventHandler) Context {
+func NewContext(router EventHandler, store *Store, client EventHandler) Context {
 	return Context{
-		ts:      time.Now(),
-		brdcast: brdcast,
-		store:   store,
-		Client:  client,
+		ts:     time.Now(),
+		store:  store,
+		Router: router,
+		Client: client,
 	}
 }

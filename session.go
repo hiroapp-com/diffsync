@@ -26,7 +26,8 @@ type SessionBackend interface {
 	Save(*Session) error
 	Delete(string) error
 	Release(*Session)
-	GetSubscriptions(Resource) ([]subscription, error)
+	SessionsOfUser(string) ([]string, error)
+	GetSubscriptions(Resource) (map[string]Resource, error)
 }
 
 type Auther interface {
@@ -81,32 +82,31 @@ func NewSession(sid, uid string) *Session {
 	}
 }
 
+func (sess *Session) setClient(c EventHandler) {
+	if c != nil {
+		sess.client = c
+	}
+}
+
 func (sess *Session) Handle(event Event) {
 	log.Printf("session[%s]: handling %s event\n", sess.sid[:6], event.Name)
 	if event.SID != sess.sid {
 		panic("RECEIVED INVALID SID WTF?!")
 		return
 	}
-	if event.ctx.Client != nil {
-		switch event.Name {
-		case "session-create", "token-consume", "client-ehlo", "res-sync":
-			log.Printf("session[%s]: setting upstream client chan\n", sess.sid[:6])
-			sess.client = event.ctx.Client
-		default:
-		}
-	}
 	switch event.Name {
 	case "session-create":
+		sess.setClient(event.ctx.Client)
 		sess.handle_session_create(event)
 	case "token-consume":
+		sess.setClient(event.ctx.Client)
 		sess.handle_token_consume(event)
-	case "res-taint":
-		sess.handle_taint(event)
-	case "res-reset":
-		sess.handle_reset(event)
+	case "res-add":
+		sess.handle_add(event)
 	case "res-sync":
 		sess.handle_sync(event)
 	case "client-ehlo":
+		sess.setClient(event.ctx.Client)
 		sess.handle_ehlo(event)
 	case "client-gone":
 		sess.handle_gone(event)
@@ -131,10 +131,16 @@ func (sess *Session) handle_sync(event Event) {
 		log.Printf("session[%s]: malformed data; res missing\n", sess.sid[:6])
 		return
 	}
+	if event.Tag == "" {
+		// nofitication that something has changed in the item. proceed with tainted flow
+		sess.handle_taint(event)
+		return
+	}
 	if event.Changes == nil {
 		log.Printf("session[%s]: malformed data; changes missing\n", sess.sid[:6])
 		return
 	}
+	sess.setClient(event.ctx.Client)
 	// todo(ACL) check if session may access data.res
 	// note: we do not check the event-tag here, because the server will
 	// always ablige to a res-sync event, whether it's a response of a cycle
@@ -158,13 +164,9 @@ func (sess *Session) handle_sync(event Event) {
 			log.Println("ERRR sync:", err) //todo error handling! do we need 'changed' here?
 		}
 	}
-	for _, res := range result.reset {
-		sess.addShadow(res, event.ctx)
-		event.ctx.brdcast.Handle(Event{Name: "res-reset", Res: res, ctx: event.ctx})
-	}
 	for _, res := range result.tainted {
 		sess.markTainted(res)
-		event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: res, ctx: event.ctx})
+		event.ctx.Router.Handle(Event{Name: "res-sync", Res: res, ctx: event.ctx})
 	}
 	tag, ok := sess.getTag(shadow.res.StringRef())
 	if ok {
@@ -210,7 +212,7 @@ func (sess *Session) handle_taint(event Event) {
 	log.Printf("session[%s]:  all tainted: %s", sess.sid[:6], sess.tainted)
 }
 
-func (sess *Session) handle_reset(event Event) {
+func (sess *Session) handle_add(event Event) {
 	sess.addShadow(event.Res, event.ctx)
 }
 
@@ -224,7 +226,7 @@ func (sess *Session) handle_session_create(event Event) {
 		// when he takes over the new Event.Session payload
 		event.SID = event.ctx.sid
 		// tell old session-handler that he should not use its client anymore
-		event.ctx.brdcast.Handle(Event{SID: event.ctx.sid, Name: "client-gone", ctx: event.ctx})
+		event.ctx.Router.Handle(Event{SID: event.ctx.sid, Name: "client-gone", ctx: event.ctx})
 	}
 	sess.push_client(event)
 }
