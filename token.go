@@ -73,7 +73,6 @@ func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
 }
 
 func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
-	log.Printf("creating new session, using token `%s`", event.Token)
 	store := event.ctx.store
 	token, err := tok.getToken(event.Token)
 	if err != nil {
@@ -82,14 +81,55 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 	sid := generateSID()
 	var profile Resource
 	switch token.Kind {
-	case "anon", "share", "share-url":
-		// anon token
-		// create new blank user
+	case "anon", "share-url":
 		profile, err = store.NewResource("profile", Context{sid: sid})
 		if err != nil {
 			return nil, err
 		}
-	case "login", "verify":
+		// add note to folio, if any in token
+		if err = tok.addNoteRef(profile.Value.(Profile).User.UID, token.NID, event.ctx); err != nil {
+			return nil, err
+		}
+	case "share":
+		profile = Resource{Kind: "profile", ID: token.UID}
+		if err = store.Load(&profile); err != nil {
+			return nil, err
+		}
+		u := profile.Value.(Profile).User
+		if token.Email == u.Email && u.EmailStatus == "unverified" {
+			if _, err = tok.db.Exec("UPDATE users SET email_status = 'verified' WHERE uid = ?", token.UID); err != nil {
+				return nil, err
+			}
+		} else if token.Phone == u.Phone && u.PhoneStatus == "unverified" {
+			if _, err = tok.db.Exec("UPDATE users SET phone_status = 'verified' WHERE uid = ?", token.UID); err != nil {
+				return nil, err
+			}
+		}
+		if u.Tier < 0 {
+			if _, err = tok.db.Exec("UPDATE users SET tier = 0 WHERE uid = ?", token.UID); err != nil {
+				return nil, err
+			}
+		}
+		// add note to folio, if any in token
+		if err = tok.addNoteRef(token.UID, token.NID, event.ctx); err != nil {
+			return nil, err
+		}
+	case "verify":
+		profile = Resource{Kind: "profile", ID: token.UID}
+		if err = store.Load(&profile); err != nil {
+			return nil, err
+		}
+		u := profile.Value.(Profile).User
+		if token.Email == u.Email && u.EmailStatus == "unverified" {
+			err = tok.claimIDAndSignup("email", u, event.ctx)
+		}
+		if token.Phone == u.Phone && u.PhoneStatus == "unverified" {
+			err = tok.claimIDAndSignup("phone", u, event.ctx)
+		}
+		if err != nil {
+			return nil, err
+		}
+	case "login":
 		// login token
 		// load token's user
 		profile = Resource{Kind: "profile", ID: token.UID}
@@ -101,40 +141,11 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 	}
 	uid := profile.Value.(Profile).User.UID
 	session := NewSession(sid, uid)
-	// token referenced NID, add to session user's folio
-	if token.NID != "" {
-		if changed, err := tok.addNoteRef(uid, token.NID); err != nil {
-			return nil, err
-		} else if changed {
-			event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "note", ID: token.NID}, ctx: event.ctx})
-			// new user got all note's peers as contacts. communicate new contacts to uid and all new contacts
-			event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "profile", ID: uid}, ctx: event.ctx})
-		}
-	}
+
 	// merge old session's data
 	if event.SID != "" {
 		if err = tok.stealNoteRef(event.SID, uid, event.ctx); err != nil {
 			return nil, err
-		}
-	}
-	// TODO(flo) if kind == share-email, share-phone: load invite-users notes
-	// see if there's an invite-user with verified email/phone.
-	// if yes, merge data over, verify own email and remove invite-user
-	if token.Kind == "verify" {
-		newNIDs := []string{}
-		switch {
-		case token.Email != "":
-			if err := tok.verifyID(uid, "email", token.Email); err == nil {
-				newNIDs, _ = tok.sweepInvites(uid, "email", token.Email)
-			}
-		case token.Phone != "":
-			if err := tok.verifyID(uid, "phone", token.Phone); err == nil {
-				newNIDs, _ = tok.sweepInvites(uid, "phone", token.Phone)
-			}
-		}
-		for i := range newNIDs {
-			event.ctx.brdcast.Handle(Event{Name: "res-reset", Res: Resource{Kind: "note", ID: newNIDs[i]}, ctx: event.ctx})
-			event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "note", ID: newNIDs[i]}, ctx: event.ctx})
 		}
 	}
 
@@ -143,7 +154,7 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 		return nil, err
 	}
 
-	// Finally, load users folio
+	// load this sessions shadows
 	folio := Resource{Kind: "folio", ID: uid}
 	if err := store.Load(&folio); err != nil {
 		return nil, err
@@ -151,33 +162,26 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 	session.shadows = append(session.shadows, NewShadow(profile), NewShadow(folio))
 	// load notes and mount shadows
 	for _, ref := range folio.Value.(Folio) {
-		log.Printf("loading add adding new note to session[%s]: `%s`\n", session.sid, ref.NID)
+		log.Printf("loading note-shadow into session[%s]: `%s`\n", session.sid, ref.NID)
 		res := Resource{Kind: "note", ID: ref.NID}
 		if err := store.Load(&res); err != nil {
 			return nil, err
 		}
 		session.shadows = append(session.shadows, NewShadow(res))
-		// make sure all other session.uid's sessions will get any merged notes
-		event.ctx.brdcast.Handle(Event{Name: "res-reset", Res: res, ctx: event.ctx})
-		event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: res, ctx: event.ctx})
 	}
-	// might be that session.uid got a new note from the anon session. taint their folio to make sure it gets propagated
-	event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "folio", ID: session.uid}, ctx: event.ctx})
 	if err = tok.sessions.Save(session); err != nil {
 		return nil, err
 	}
 	return session, nil
 }
 
-///func (tok *TokenConsumer) Consume(token_key, sid string, store *Store) (*Session, error) {
 func (tok *TokenConsumer) consumeToken(event Event) (*Session, error) {
-	log.Printf("consuming token `%s` (for sid `%s`)", event.Token, event.SID)
 	token, err := tok.getToken(event.Token)
 	if err != nil {
 		return nil, err
 	}
 	if !strings.HasPrefix(token.Kind, "share") {
-		return nil, errors.New("cannot consume non-shareing token" + token.Kind)
+		return nil, errors.New("cannot consume non-sharing token" + token.Kind)
 	}
 	log.Printf("loading session (%s) from hub", event.SID)
 	session, err := tok.hub.Snapshot(event.SID, event.ctx)
@@ -187,20 +191,9 @@ func (tok *TokenConsumer) consumeToken(event Event) (*Session, error) {
 		// even if provided session is dead for some reason
 		return nil, err
 	}
-	if token.NID == "" {
-		// token is not a note-sharing token. unable to consume
-		return nil, errors.New("note-id is missing in token info (how can that happen?). aborting")
-	}
-	added, err := tok.addNoteRef(session.uid, token.NID)
+	err = tok.addNoteRef(session.uid, token.NID, event.ctx)
 	if err != nil {
 		return nil, err
-	}
-	if added {
-		// notify the session that its folio has changed
-		event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "folio", ID: session.uid}, ctx: event.ctx})
-		// addressing res-reset directly to sid (b/c its the only one interested
-		event.ctx.brdcast.Handle(Event{SID: event.ctx.sid, Name: "res-reset", Res: Resource{Kind: "note", ID: token.NID}, ctx: event.ctx})
-		event.ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "note", ID: token.NID}, ctx: event.ctx})
 	}
 	return session, nil
 }
@@ -225,16 +218,93 @@ func (tok *TokenConsumer) getToken(plain string) (Token, error) {
 	return token, nil
 }
 
-func (tok *TokenConsumer) addNoteRef(uid, nid string) (changed bool, err error) {
-	// TODO mayb we can refactor this part to instead of directly modifying the DB
-	// we send an appropriate add-noteref patch down the wire to the folio-store and let the
-	// machinery do the rest
-	res, err := tok.db.Exec("INSERT INTO noterefs (uid, nid, status, role) VALUES (?, ?, 'active', 'active')", uid, nid)
+func (tok *TokenConsumer) claimIDAndSignup(id string, user User, ctx Context) error {
+	txn, err := tok.db.Begin()
 	if err != nil {
-		return false, err
+		return err
 	}
-	numChanges, _ := res.RowsAffected()
-	return (numChanges > 0), nil
+	var v string
+	switch id {
+	case "email":
+		v = user.Email
+	case "phone":
+		v = user.Phone
+	default:
+		return fmt.Errorf("invalid ID passed. can only claim 'phone' or 'email'")
+	}
+	f := func(qry string) string {
+		return strings.Replace(qry, "$FIELD$", id, -1)
+	}
+	// get all note-ids which we will take over, so we can taint them later
+	rs, err := txn.Query(f("SELECT uid, nid FROM noterefs WHERE uid IN (SELECT uid FROM users WHERE uid <> ? AND $FIELD$ = ?)"), user.UID, v)
+	if err != nil {
+		txn.Rollback()
+		return err
+	}
+	// http://localhost:5000/#32c39993ee6746edb0883d88386fba9c
+	nids := [][2]string{}
+	for rs.Next() {
+		var uid, nid string
+		if err = rs.Scan(&uid, &nid); err != nil {
+			txn.Rollback()
+			return err
+		}
+		nids = append(nids, [2]string{uid, nid})
+	}
+	// now change those noterefs to the claiming UID
+	if _, err = txn.Exec(f("UPDATE noterefs SET uid = ? WHERE uid IN (select uid from users WHERE uid <> ? and $FIELD$ = ?)"), user.UID, user.UID, v); err != nil {
+		txn.Rollback()
+		return err
+	}
+	// also claim all his contacts...
+	if _, err = txn.Exec(f("UPDATE contacts SET uid = ? WHERE uid IN (select uid from users WHERE uid <> ? and $FIELD$ = ?)"), user.UID, user.UID, v); err != nil {
+		txn.Rollback()
+		return err
+	}
+	// ...symmetrically
+	if _, err = txn.Exec(f("UPDATE contacts SET contact_uid = ? WHERE contact_uid IN (select uid from users WHERE uid <> ? and $FIELD$ = ?)"), user.UID, user.UID, v); err != nil {
+		txn.Rollback()
+		return err
+	}
+	// mark all other users with his email as disabled (tier -2)
+	if _, err = txn.Exec(f("UPDATE users SET tier = -2 WHERE uid IN (select uid from users WHERE uid <> ? and $FIELD$ = ?)"), user.UID, v); err != nil {
+		txn.Rollback()
+		return err
+	}
+	// and set claiming user's email status to verified
+	if _, err = txn.Exec(f("UPDATE users SET $FIELD$_status = 'verified' WHERE uid = ?"), user.UID); err != nil {
+		txn.Rollback()
+		return err
+	}
+	// sign him up!
+	if _, err = txn.Exec("UPDATE users SET tier = 1 WHERE uid = ?", user.UID); err != nil {
+		txn.Rollback()
+		return err
+	}
+	for i := range nids {
+		ctx.Router.Handle(Event{UID: nids[i][0], Name: "res-remove", Res: Resource{Kind: "note", ID: nids[i][1]}, ctx: ctx})
+		ctx.Router.Handle(Event{UID: user.UID, Name: "res-add", Res: Resource{Kind: "note", ID: nids[i][1]}, ctx: ctx})
+		ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "note", ID: nids[i][1]}, ctx: ctx})
+	}
+	txn.Commit()
+	return nil
+}
+
+func (tok *TokenConsumer) addNoteRef(uid, nid string, ctx Context) error {
+	if nid == "" {
+		// no nid provided, nothin to add
+		return nil
+	}
+	res := NewSyncResult()
+	if err := ctx.store.Patch(Resource{Kind: "folio", ID: uid}, Patch{Op: "add-noteref", Value: NoteRef{NID: nid, Status: "active"}}, res, ctx); err != nil {
+		return err
+	}
+	for _, r := range res.TaintedItems() {
+		if err := ctx.Router.Handle(Event{Name: "res-sync", Res: r, ctx: ctx}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (tok *TokenConsumer) stealNoteRef(sid, uid string, ctx Context) error {
@@ -260,102 +330,25 @@ func (tok *TokenConsumer) stealNoteRef(sid, uid string, ctx Context) error {
 	if err = ctx.store.Load(&p); err != nil {
 		return err
 	}
-	if p.Value.(Profile).User.Tier == 0 {
+	if p.Value.(Profile).User.Tier != 0 {
 		// only merge data from anon sessions
-		res := NewSyncResult()
-		for _, shadow := range s.shadows {
-			// only extract notes
-			if shadow.res.Kind == "note" {
-				if err = ctx.store.Patch(shadow.res, Patch{Op: "change-peer-uid", Path: s.uid, Value: uid}, res, ctx); err != nil {
-					return err
-				}
-			}
-		}
-		if len(res.tainted) > 0 {
-			ctx.brdcast.Handle(Event{Name: "res-taint", Res: Resource{Kind: "folio", ID: uid}, ctx: ctx})
-			// n.b. we're omitting the res-taint for the previous owner's folio here.
-			// this method is supposed to be used for takeover of anon-session's notes
-			// on login/signup so the old session and user get discarded and never used again.
-			for _, res := range res.tainted {
-				ctx.brdcast.Handle(Event{Name: "res-reset", Res: res, ctx: ctx})
-				ctx.brdcast.Handle(Event{Name: "res-taint", Res: res, ctx: ctx})
+		return nil
+	}
+	res := NewSyncResult()
+	for _, shadow := range s.shadows {
+		// only extract notes
+		if shadow.res.Kind == "note" {
+			if err = ctx.store.Patch(shadow.res, Patch{Op: "change-peer-uid", Path: s.uid, Value: uid}, res, ctx); err != nil {
+				return err
 			}
 		}
 	}
-	return nil
-}
-
-func (tok *TokenConsumer) verifyID(uid, kind, to_verify string) error {
-	switch kind {
-	case "email", "phone":
-	default:
-		return errors.New("only `email` or `phone` verifications supported")
-	}
-	injectKind := func(qry string) string {
-		return strings.Replace(qry, "KIND", kind, -1)
-	}
-	res, err := tok.db.Exec(injectKind(`UPDATE users SET KIND_status = 'verified' 
-						WHERE uid = ? 
-						AND KIND = ?
-						AND (SELECT count(*) FROM users where KIND = ? and KIND_status = 'verified') = 0`), uid, to_verify, to_verify)
-	if err != nil {
-		return err
-	}
-	if affected, _ := res.RowsAffected(); affected == 0 {
-		// query didnt go trhough, means we could not verify anything.
-		return fmt.Errorf("coul not verify email for uid %s email/phone %s", uid, to_verify)
+	if len(res.TaintedItems()) > 0 {
+		for _, res := range res.TaintedItems() {
+			ctx.Router.Handle(Event{Name: "res-sync", Res: res, ctx: ctx})
+		}
 	}
 	return nil
-}
-func (tok *TokenConsumer) sweepInvites(uid, kind, to_verify string) (invitedNIDs []string, err error) {
-	// now see if there's an invite user with given ID dangling around
-	invitedNIDs = []string{}
-	txn, err := tok.db.Begin()
-	if err != nil {
-		return
-	}
-	injectKind := func(qry string) string {
-		return strings.Replace(qry, "KIND", kind, -1)
-	}
-	rows, err := txn.Query(injectKind("SELECT nid FROM noterefs where uid IN (SELECT uid from users WHERE KIND = ? and KIND_status = 'invited')"), to_verify)
-	if err == sql.ErrNoRows {
-		log.Println("none found")
-		txn.Commit()
-		return
-	} else if err != nil {
-		txn.Rollback()
-		return
-	}
-	stmt, err := txn.Prepare("INSERT INTO noterefs (nid, uid, status, role) VALUES (?, ?, 'active', 'active')")
-	if err != nil {
-		rows.Close()
-		txn.Rollback()
-		return
-	}
-	defer stmt.Close()
-	for rows.Next() {
-		var nid string
-		if err = rows.Scan(&nid); err != nil {
-			txn.Rollback()
-			return
-		}
-		var res sql.Result
-		if res, err = stmt.Exec(nid, uid); err != nil {
-			txn.Rollback()
-			return
-		}
-		if affected, _ := res.RowsAffected(); affected > 0 {
-			invitedNIDs = append(invitedNIDs, nid)
-		}
-	}
-	_, err = txn.Exec(injectKind("UPDATE users SET KIND_status = 'consumed' WHERE KIND = ? AND KIND_status = 'invited'"), to_verify)
-	if err != nil {
-		txn.Rollback()
-		return
-	}
-	txn.Commit()
-	return
-
 }
 
 func (err TokenDoesNotexistError) Error() string {

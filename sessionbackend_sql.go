@@ -81,40 +81,56 @@ func (store *SQLSessions) allocateSession() *Session {
 	return sess
 }
 
-func (store *SQLSessions) subsByQuery(res Resource, qry string, args ...interface{}) ([]subscription, error) {
+func (store *SQLSessions) subsByQuery(res Resource, qry string, args ...interface{}) (map[string]Resource, error) {
 	rows, err := store.db.Query(qry, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	subs := []subscription{}
+	subs := map[string]Resource{}
 	resetResID := (res.ID == "")
 	for rows.Next() {
-		var sid, uid string
-		err := rows.Scan(&sid, &uid)
-		if err != nil {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
 			return nil, err
 		}
 		if resetResID {
 			res.ID = uid
 		}
-		subs = append(subs, subscription{sid: sid, uid: uid, res: res})
+		subs[uid] = Resource{Kind: res.Kind, ID: res.ID}
 	}
 	return subs, nil
 }
 
-func (store *SQLSessions) GetSubscriptions(res Resource) ([]subscription, error) {
+func (store *SQLSessions) SessionsOfUser(uid string) ([]string, error) {
+	sids := []string{}
+	rows, err := store.db.Query("SELECT sid FROM sessions WHERE uid = ?", uid)
+	if err != nil {
+		return sids, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sid string
+		if err = rows.Scan(&sid); err != nil {
+			return sids, err
+		}
+		sids = append(sids, sid)
+	}
+	return sids, nil
+}
+
+func (store *SQLSessions) GetSubscriptions(res Resource) (map[string]Resource, error) {
 	switch res.Kind {
 	case "note":
 		// get all sessions of all users who have a noteref for this note
-		return store.subsByQuery(res, "SELECT sid, uid FROM sessions WHERE uid in (SELECT uid FROM noterefs WHERE nid = ?)", res.ID)
+		return store.subsByQuery(res, "SELECT uid FROM noterefs WHERE nid = ?", res.ID)
 	case "folio":
 		// get all sessions of this folio's user
-		return store.subsByQuery(res, "SELECT sid, uid FROM sessions WHERE uid = ?", res.ID)
+		return map[string]Resource{res.ID: res}, nil
 	case "profile":
 		// first get all session of this profile's user
-		return store.subsByQuery(Resource{Kind: "profile"}, `SELECT sid, uid 
-										                      FROM sessions 
+		return store.subsByQuery(Resource{Kind: "profile"}, `SELECT uid 
+										                      FROM users 
 									                          WHERE uid = ?
 										                        OR uid in (SELECT uid FROM contacts WHERE contact_uid = ?)
 										                        OR uid in (SELECT nr.uid 
@@ -123,5 +139,5 @@ func (store *SQLSessions) GetSubscriptions(res Resource) ([]subscription, error)
 										                     				  ON nr.nid = nr2.nid AND nr2.uid = ?
 										                     			  WHERE nr.uid <> ? AND nr2.uid is not null)`, res.ID, res.ID, res.ID, res.ID)
 	}
-	return []subscription{}, nil
+	return map[string]Resource{}, nil
 }
