@@ -49,9 +49,8 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, result *SyncResult
 		if err != nil {
 			return err
 		}
-		result.Removed(Resource{Kind: "note", ID: patch.Path})
-		result.Taint(Resource{Kind: "note", ID: patch.Path})
-		result.Taint(Resource{Kind: "folio", ID: uid})
+		result.Tainted(Resource{Kind: "folio", ID: uid})
+		result.Tainted(Resource{Kind: "note", ID: patch.Path})
 	case "set-status":
 		// patch.Path contains Note ID
 		// patch.Value contains new Status
@@ -64,7 +63,7 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, result *SyncResult
 		if err != nil {
 			return fmt.Errorf("folioSQLbackend: uid(%s) status change for nid(%s): could not persist new status: `%s`", uid, patch.Path, status)
 		}
-		result.Taint(Resource{Kind: "folio", ID: uid})
+		result.Tainted(Resource{Kind: "folio", ID: uid})
 	case "add-noteref":
 		// patch.Path empty
 		// patch.Value contains new NoteRef value

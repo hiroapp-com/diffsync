@@ -126,7 +126,7 @@ func (suite *SessionTests) createUserWith2Notes(name string) User {
 		suite.T().Fatal("cannot create user")
 	}
 	user := res.Value.(Profile).User
-	result := SyncResult{}
+	result := NewSyncResult()
 	err = store.Patch(res, Patch{"set-tier", "user/", int64(1), int64(0)}, &result, ctx)
 	suite.NoError(err, "cannot lift users tier")
 	suite.Equal(1, len(result.tainted), "set-tier did not taint profile")

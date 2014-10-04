@@ -103,7 +103,7 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, result *SyncResu
 		if err != nil {
 			return err
 		}
-		result.Taint(Resource{Kind: "profile", ID: uid})
+		result.Tainted(Resource{Kind: "profile", ID: uid})
 	case "set-email":
 		// patch.Path must be "user/"
 		// patch.Value contains the new Email
@@ -118,7 +118,7 @@ func (backend ProfileSQLBackend) Patch(uid string, patch Patch, result *SyncResu
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			go backend.sendVerifyToken(uid, emailRcpt(User{Email: patch.Value.(string)}), ctx.store)
 		}
-		result.Taint(Resource{Kind: "profile", ID: uid})
+		result.Tainted(Resource{Kind: "profile", ID: uid})
 
 	case "set-tier":
 		// patch.Path must be "user/"

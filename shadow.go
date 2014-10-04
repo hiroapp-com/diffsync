@@ -8,8 +8,6 @@ import (
 
 type SyncResult struct {
 	tainted []Resource
-	removed []Resource
-	reset   []Resource
 }
 
 type Shadow struct {
@@ -38,7 +36,9 @@ func NewShadow(res Resource) *Shadow {
 }
 
 func NewSyncResult() *SyncResult {
-	return &SyncResult{tainted: []Resource{}, reset: []Resource{}}
+	return &SyncResult{
+		tainted: []Resource{},
+	}
 }
 
 func (shadow *Shadow) Rollback() {
@@ -205,41 +205,16 @@ func (shadow *Shadow) UnmarshalJSON(from []byte) error {
 	return nil
 }
 
-func (result *SyncResult) Taint(res Resource) {
-	if result.tainted == nil {
-		result.tainted = []Resource{}
-	}
-	for i := range result.tainted {
-		if res.SameRef(result.tainted[i]) {
+func (sr *SyncResult) Tainted(r Resource) {
+	for i := range sr.tainted {
+		if r.SameRef(sr.tainted[i]) {
 			// exists already
 			return
 		}
 	}
-	result.tainted = append(result.tainted, res)
+	sr.tainted = append(sr.tainted, r)
 }
 
-func (result *SyncResult) Removed(res Resource) {
-	if result.removed == nil {
-		result.removed = []Resource{}
-	}
-	for i := range result.removed {
-		if res.SameRef(result.removed[i]) {
-			// exists already
-			return
-		}
-	}
-	result.removed = append(result.removed, res)
-}
-
-func (result *SyncResult) Reset(res Resource) {
-	if result.reset == nil {
-		result.reset = []Resource{}
-	}
-	for i := range result.reset {
-		if res.SameRef(result.reset[i]) {
-			// exists already
-			return
-		}
-	}
-	result.reset = append(result.reset, res)
+func (sr *SyncResult) TaintedItems() []Resource {
+	return sr.tainted
 }

@@ -87,7 +87,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if err = backend.pokeTimers(nid, true, ctx); err != nil {
 			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
-		result.Taint(Resource{Kind: "note", ID: nid})
+		result.Tainted(Resource{Kind: "note", ID: nid})
 	case "title":
 		// patch.Path empty
 		// patch.Value contains new Title
@@ -100,7 +100,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if err = backend.pokeTimers(nid, numChanges > 0, ctx); err != nil {
 			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
-		result.Taint(Resource{Kind: "note", ID: nid})
+		result.Tainted(Resource{Kind: "note", ID: nid})
 	case "invite-user":
 		// patch.Path emtpy
 		// patch.Value contains User object (maybe without UID)
@@ -157,7 +157,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if err != nil {
 			return err
 		}
-		result.Taint(Resource{Kind: "note", ID: nid})
+		result.Tainted(Resource{Kind: "note", ID: nid})
 	case "rem-peer":
 		// patch.Path contains UID of peer to remove
 		// patch.Value empty
@@ -166,15 +166,8 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if err != nil {
 			return err
 		}
-		// n.b we're not adding the resource to removed since we're not removing it
-		// from this session. this means that the actual removal from the removed
-		// user's session-shadows will not be propagated.
-		// that means someone *could* (if put enought effort to it) still sync the note
-		// given that he retained all intofmation (note-id etc) and implemented the
-		// protocoll
-		result.Taint(Resource{Kind: "note", ID: nid})
-		// notify removed peer that he has lost a note
-		result.Taint(Resource{Kind: "folio", ID: patch.Path})
+		result.Tainted(Resource{Kind: "folio", ID: patch.Path})
+		result.Tainted(Resource{Kind: "note", ID: nid})
 	case "set-seen":
 		// patch.Path contains UID of peer who has seen stuff
 		// patch.Value empty
@@ -185,7 +178,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if err := backend.pokeTimers(nid, false, ctx); err != nil {
 			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
-		result.Taint(Resource{Kind: "note", ID: nid})
+		result.Tainted(Resource{Kind: "note", ID: nid})
 	case "change-peer-uid":
 		// patch.Path contains old peer's UID
 		// patch.Value new peer's UID
@@ -195,7 +188,11 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 			return err
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
-			result.Taint(Resource{Kind: "note", ID: nid})
+			// n.b. we're omitting the res-taint for the previous owner's folio here.
+			// this method is supposed to be used for takeover of anon-session's notes
+			// on login/signup so the old session and user get discarded and never used again.
+			result.Tainted(Resource{Kind: "folio", ID: patch.Value.(string)})
+			result.Tainted(Resource{Kind: "note", ID: nid})
 		}
 	}
 	return nil
@@ -243,7 +240,7 @@ func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch, result *Sy
 	}
 	txn.Commit()
 	if original != patched {
-		result.Taint(Resource{Kind: "note", ID: id})
+		result.Tainted(Resource{Kind: "note", ID: id})
 	}
 	return nil
 }
