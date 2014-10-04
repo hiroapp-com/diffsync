@@ -46,6 +46,17 @@ func (shadow *Shadow) Rollback() {
 	shadow.pending = []Edit{}
 }
 
+func (shadow *Shadow) AddEdit(edit Edit) {
+	// sanity check if provided edit is alreay in pending
+	if len(shadow.pending) > 0 {
+		if e := shadow.pending[len(shadow.pending)-1]; e.Clock == edit.Clock && !edit.Delta.HasChanges() && !e.Delta.HasChanges() {
+			// dupe
+			return
+		}
+	}
+	shadow.pending = append(shadow.pending, edit)
+}
+
 func (shadow *Shadow) UpdatePending(forceEmptyDelta bool, store *Store) bool {
 	res := shadow.res.Ref()
 	log.Printf("shadow[%s]: calculating new delta and upate pending-queue\n", res.StringRef())
@@ -57,12 +68,12 @@ func (shadow *Shadow) UpdatePending(forceEmptyDelta bool, store *Store) bool {
 	delta := shadow.res.Value.GetDelta(res.Value)
 	log.Printf("shadow[%s]: found delta: `%s`\n", res.StringRef(), delta)
 	if delta.HasChanges() {
-		shadow.pending = append(shadow.pending, Edit{shadow.SessionClock.Clone(), delta})
+		shadow.AddEdit(Edit{shadow.SessionClock.Clone(), delta})
 		shadow.res = res
 		shadow.IncSv()
 		return true
 	} else if forceEmptyDelta {
-		shadow.pending = append(shadow.pending, Edit{shadow.SessionClock.Clone(), delta})
+		shadow.AddEdit(Edit{shadow.SessionClock.Clone(), delta})
 		return true
 	}
 	return false
