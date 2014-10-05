@@ -48,7 +48,8 @@ func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 								    FROM noterefs as nr 
 									  LEFT JOIN users as u1
 									    ON u1.uid = nr.uid
-									WHERE nid = ?`, key)
+									WHERE nid = ? 
+									  AND tier > -2`, key)
 	if err != nil {
 		return nil, err
 	}

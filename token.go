@@ -144,9 +144,15 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 
 	// merge old session's data
 	if event.SID != "" {
-		if err = tok.stealNoteRef(event.SID, uid, event.ctx); err != nil {
+		oldUID, err := tok.uidFromSID(event.SID, true)
+		if err != nil {
 			return nil, err
 		}
+		if err = tok.assimilateUser(oldUID, uid, event.ctx); err != nil {
+			return nil, err
+		}
+		event.ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "folio", ID: uid}, ctx: event.ctx})
+		event.ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "profile", ID: uid}, ctx: event.ctx})
 	}
 
 	// re-load profile
@@ -161,6 +167,8 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 	}
 	session.shadows = append(session.shadows, NewShadow(profile), NewShadow(folio))
 	// load notes and mount shadows
+	// TODO should this happe in the sessionhandler? e.g. only send the session-create
+	//  down and let the handle_session_create() do the rest, load all its info
 	for _, ref := range folio.Value.(Folio) {
 		log.Printf("loading note-shadow into session[%s]: `%s`\n", session.sid, ref.NID)
 		res := Resource{Kind: "note", ID: ref.NID}
@@ -218,6 +226,72 @@ func (tok *TokenConsumer) getToken(plain string) (Token, error) {
 	return token, nil
 }
 
+func (tok *TokenConsumer) uidFromSID(sid string, onlyAnon bool) (uid string, err error) {
+	if onlyAnon {
+		err = tok.db.QueryRow("SELECT sessions.uid FROM sessions LEFT JOIN users ON users.uid = sessions.uid WHERE sid = ? AND users.tier = 0", sid).Scan(&uid)
+	} else {
+		err = tok.db.QueryRow("SELECT sessions.uid FROM sessions WHERE sid = ?", sid).Scan(&uid)
+	}
+	if err == sql.ErrNoRows {
+		// return no error but empty uid if no result
+		err = nil
+		uid = ""
+	}
+	return
+}
+
+func (tok *TokenConsumer) assimilateUser(uidMan, uidBorg string, ctx Context) error {
+	if uidMan == "" {
+		// assimilation is futile
+		return nil
+	}
+	txn, err := tok.db.Begin()
+	if err != nil {
+		return err
+	}
+	// get all note-ids which we will take over, so we can taint them later
+	rs, err := txn.Query("SELECT nid FROM noterefs WHERE uid = ?", uidMan)
+	if err != nil {
+		txn.Rollback()
+		return err
+	}
+	nids := []string{}
+	for rs.Next() {
+		var nid string
+		if err = rs.Scan(&nid); err != nil {
+			txn.Rollback()
+			return err
+		}
+		nids = append(nids, nid)
+	}
+	// now change those noterefs to the claiming UID
+	if _, err = txn.Exec("UPDATE noterefs SET uid = ? WHERE uid = ?", uidBorg, uidMan); err != nil {
+		txn.Rollback()
+		return err
+	}
+	// also claim all his contacts...
+	if _, err = txn.Exec("UPDATE contacts SET uid = ? WHERE uid = ?", uidBorg, uidMan); err != nil {
+		txn.Rollback()
+		return err
+	}
+	// ...symmetrically
+	if _, err = txn.Exec("UPDATE contacts SET contact_uid = ? WHERE contact_uid = ?", uidBorg, uidMan); err != nil {
+		txn.Rollback()
+		return err
+	}
+	// mark all other users with his email as disabled (tier -2)
+	if _, err = txn.Exec("UPDATE users SET tier = -2 WHERE uid = ?", uidMan); err != nil {
+		txn.Rollback()
+		return err
+	}
+	for i := range nids {
+		ctx.Router.Handle(Event{UID: uidMan, Name: "res-remove", Res: Resource{Kind: "note", ID: nids[i]}, ctx: ctx})
+		ctx.Router.Handle(Event{UID: uidBorg, Name: "res-add", Res: Resource{Kind: "note", ID: nids[i]}, ctx: ctx})
+		ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "note", ID: nids[i]}, ctx: ctx})
+	}
+	txn.Commit()
+	return nil
+}
 func (tok *TokenConsumer) claimIDAndSignup(id string, user User, ctx Context) error {
 	txn, err := tok.db.Begin()
 	if err != nil {

@@ -42,12 +42,15 @@ func (backend ProfileSQLBackend) Get(uid string) (ResourceValue, error) {
 									LEFT OUTER JOIN contacts as c
 									  ON c.contact_uid = u.uid AND c.uid = ?
 									WHERE 
+										u.tier > -2
+									 AND (
 										c.uid is not null
 									 OR u.uid in (SELECT nr.uid 
 													  FROM noterefs as nr
 													  LEFT OUTER JOIN noterefs as nr2
 													    ON nr.nid = nr2.nid AND nr2.uid = ?
-													  WHERE nr.uid <> ? AND nr2.uid is not null)`, uid, uid, uid)
+													  WHERE nr.uid <> ? AND nr2.uid is not null)
+										)`, uid, uid, uid)
 
 	if err != nil {
 		return nil, err
