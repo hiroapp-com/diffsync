@@ -37,10 +37,6 @@ func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 	peers := PeerList{}
 	rows, err := backend.db.Query(`SELECT nr.uid, 
 										  u1.tier,
-										  u1.email, 
-										  u1.email_status,
-										  u1.phone, 
-										  u1.phone_status,
 										  nr.cursor_pos, 
 										  nr.last_seen, 
 										  nr.last_edit, 
@@ -56,15 +52,8 @@ func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 	defer rows.Close()
 	for rows.Next() {
 		peer := Peer{User: User{}}
-		var email, emailStatus, phone, phoneStatus sql.NullString
-		if err := rows.Scan(&peer.User.UID, &peer.User.Tier, &email, &emailStatus, &phone, &phoneStatus, &peer.CursorPosition, &peer.LastSeen, &peer.LastEdit, &peer.Role); err != nil {
+		if err := rows.Scan(&peer.User.UID, &peer.User.Tier, &peer.CursorPosition, &peer.LastSeen, &peer.LastEdit, &peer.Role); err != nil {
 			return nil, err
-		}
-		if emailStatus.Valid && (emailStatus.String == "verified" || emailStatus.String == "invited") {
-			peer.User.Email = email.String
-		}
-		if phoneStatus.Valid && (phoneStatus.String == "verified" || phoneStatus.String == "invited") {
-			peer.User.Phone = phone.String
 		}
 		peers = append(peers, peer)
 	}
