@@ -90,7 +90,7 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, result *SyncResult
 			}
 		} else {
 			// add existing note to folio
-			if res, err = backend.db.Exec("INSERT INTO noterefs (uid, nid, status, role) VALUES (?, ?, 'active', 'active')", uid, ref.NID); err != nil {
+			if res, err = backend.db.Exec("INSERT INTO noterefs (uid, nid, status, role) VALUES (?, ?, 'active', 'peer')", uid, ref.NID); err != nil {
 				return err
 			}
 		}

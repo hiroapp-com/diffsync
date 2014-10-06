@@ -157,7 +157,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if u == nil {
 			panic("NULLUSER WTF?!")
 		}
-		res, err := backend.db.Exec("INSERT INTO noterefs (nid, uid, role, status) VALUES(?, ?, 'invited', 'active')", nid, u.UID)
+		res, err := backend.db.Exec("INSERT INTO noterefs (nid, uid, role, status) VALUES(?, ?, 'peer', 'active')", nid, u.UID)
 		if err != nil {
 			return fmt.Errorf("could not create note-ref for invitee: nid: %s, uid: %s", nid, u.UID)
 		}
