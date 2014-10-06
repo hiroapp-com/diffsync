@@ -129,6 +129,8 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 		if err != nil {
 			return nil, err
 		}
+		event.ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "profile", ID: u.UID}, ctx: event.ctx})
+		event.ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "folio", ID: u.UID}, ctx: event.ctx})
 	case "login":
 		// login token
 		// load token's user
