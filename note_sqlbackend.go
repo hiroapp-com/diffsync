@@ -276,7 +276,7 @@ func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx Context) (e
 func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 	rcpt := preferredRcpt(user)
 	token, hashed := generateToken()
-	reqData := map[string]string{"token": token}
+	reqData := map[string]string{"token": token, "nid": nid}
 	// get info from inviter
 	res := Resource{Kind: "profile", ID: ctx.uid}
 	inviter := User{}
@@ -289,10 +289,10 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 	var err error
 	switch addr, addrKind := rcpt.Addr(); addrKind {
 	case "phone":
-		reqData["inviter_name"] = firstNonEmpty(inviter.Name, "Anonymous")
+		reqData["inviter_name"] = firstNonEmpty(inviter.Name, "Someone")
 		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, phone) VALUES (?, 'share', ?, ?, ?)", hashed, user.UID, nid, addr)
 	case "email":
-		reqData["inviter_name"] = firstNonEmpty(inviter.Name, "Anonymous")
+		reqData["inviter_name"] = firstNonEmpty(inviter.Name, "Someone")
 		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, email) VALUES (?, 'share', ?, ?, ?)", hashed, user.UID, nid, addr)
 	default:
 		log.Printf("warn: cannot invite user[%s]. no usable contanct-addr found", user.UID)
