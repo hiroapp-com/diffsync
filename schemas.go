@@ -67,7 +67,7 @@ const (
 			nid text default "",
 			email text default "",
 			phone text default "",
-			created_at timestamp default (datetime('now')),
+			valid_from timestamp default (datetime('now')),
 			consumed_at timestamp default NULL
 		);`
 	CREATE_SESSIONS = `

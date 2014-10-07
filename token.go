@@ -9,19 +9,40 @@ import (
 	"io"
 	"log"
 	"strings"
+	"time"
 
 	"database/sql"
 )
 
+var tokenLifeTimes = map[string]time.Duration{
+	"login":     5 * time.Minute,
+	"anon":      5 * time.Minute,
+	"verify":    2 * 7 * 24 * time.Hour,    //2 weeks
+	"share-url": 3 * 30.5 * 24 * time.Hour, //3 months
+	"share":     1 * 30.5 * 24 * time.Hour, //1 month
+}
+
 type Token struct {
-	Key        string
-	Kind       string
-	UID        string
-	NID        string
-	Email      string
-	Phone      string
-	CreatedAt  string
-	ConsumedAt string
+	Key           string
+	Kind          string
+	UID           string
+	NID           string
+	Email         string
+	Phone         string
+	ValidFrom     *time.Time
+	TimesConsumed int64
+}
+
+func (t Token) Expired() bool {
+	lt, _ := tokenLifeTimes[t.Kind]
+	return time.Now().After(t.ValidFrom.Add(lt))
+}
+
+func (t Token) Exhausted() bool {
+	if t.Kind == "share-url" {
+		return t.TimesConsumed >= 10
+	}
+	return t.TimesConsumed > 0
 }
 
 type TokenDoesNotexistError string
@@ -37,11 +58,15 @@ func NewTokenConsumer(backend SessionBackend, hub *SessionHub, db *sql.DB) *Toke
 }
 
 func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
-	var err error
 	var session *Session
 	switch event.Name {
 	case "session-create":
-		session, err = tok.CreateSession(event)
+		token, err := tok.getToken(event.Token)
+		if err != nil {
+			return err
+		}
+		event.ctx.sid = event.SID
+		session, err = tok.createSession(token, event.ctx)
 		if err != nil {
 			return err
 		}
@@ -53,14 +78,25 @@ func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
 		}
 		event.ctx.uid = session.uid
 		event.SID = session.sid
+		if err = tok.markConsumed(token); err != nil {
+			return err
+		}
 	case "token-consume":
-		session, err := tok.consumeToken(event)
+		token, err := tok.getToken(event.Token)
+		if err != nil {
+			return err
+		}
+		event.ctx.sid = event.SID
+		session, err := tok.consumeToken(token, event.ctx)
 		if err != nil {
 			return err
 		}
 		event.ctx.sid = session.sid
 		event.ctx.uid = session.uid
 		event.SID = session.sid
+		if err = tok.markConsumed(token); err != nil {
+			return err
+		}
 	default:
 		uid, err := tok.GetUID(event.SID)
 		if err != nil {
@@ -72,14 +108,11 @@ func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
 	return next.Handle(event)
 }
 
-func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
-	store := event.ctx.store
-	token, err := tok.getToken(event.Token)
-	if err != nil {
-		return nil, err
-	}
+func (tok *TokenConsumer) createSession(token Token, ctx Context) (*Session, error) {
+	store := ctx.store
 	sid := generateSID()
 	var profile Resource
+	var err error
 	switch token.Kind {
 	case "anon", "share-url":
 		profile, err = store.NewResource("profile", Context{sid: sid})
@@ -87,7 +120,7 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 			return nil, err
 		}
 		// add note to folio, if any in token
-		if err = tok.addNoteRef(profile.Value.(Profile).User.UID, token.NID, event.ctx); err != nil {
+		if err = tok.addNoteRef(profile.Value.(Profile).User.UID, token.NID, ctx); err != nil {
 			return nil, err
 		}
 	case "share":
@@ -111,7 +144,7 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 			}
 		}
 		// add note to folio, if any in token
-		if err = tok.addNoteRef(token.UID, token.NID, event.ctx); err != nil {
+		if err = tok.addNoteRef(token.UID, token.NID, ctx); err != nil {
 			return nil, err
 		}
 	case "verify":
@@ -121,16 +154,16 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 		}
 		u := profile.Value.(Profile).User
 		if token.Email == u.Email && u.EmailStatus == "unverified" {
-			err = tok.claimIDAndSignup("email", u, event.ctx)
+			err = tok.claimIDAndSignup("email", u, ctx)
 		}
 		if token.Phone == u.Phone && u.PhoneStatus == "unverified" {
-			err = tok.claimIDAndSignup("phone", u, event.ctx)
+			err = tok.claimIDAndSignup("phone", u, ctx)
 		}
 		if err != nil {
 			return nil, err
 		}
-		event.ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "profile", ID: u.UID}, ctx: event.ctx})
-		event.ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "folio", ID: u.UID}, ctx: event.ctx})
+		ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "profile", ID: u.UID}, ctx: ctx})
+		ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "folio", ID: u.UID}, ctx: ctx})
 	case "login":
 		// login token
 		// load token's user
@@ -145,16 +178,16 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 	session := NewSession(sid, uid)
 
 	// merge old session's data
-	if event.SID != "" {
-		oldUID, err := tok.uidFromSID(event.SID, true)
+	if ctx.sid != "" {
+		oldUID, err := tok.uidFromSID(ctx.sid, true)
 		if err != nil {
 			return nil, err
 		}
-		if err = tok.assimilateUser(oldUID, uid, event.ctx); err != nil {
+		if err = tok.assimilateUser(oldUID, uid, ctx); err != nil {
 			return nil, err
 		}
-		event.ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "folio", ID: uid}, ctx: event.ctx})
-		event.ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "profile", ID: uid}, ctx: event.ctx})
+		ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "folio", ID: uid}, ctx: ctx})
+		ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "profile", ID: uid}, ctx: ctx})
 	}
 
 	// re-load profile
@@ -185,23 +218,19 @@ func (tok *TokenConsumer) CreateSession(event Event) (*Session, error) {
 	return session, nil
 }
 
-func (tok *TokenConsumer) consumeToken(event Event) (*Session, error) {
-	token, err := tok.getToken(event.Token)
-	if err != nil {
-		return nil, err
-	}
+func (tok *TokenConsumer) consumeToken(token Token, ctx Context) (*Session, error) {
 	if !strings.HasPrefix(token.Kind, "share") {
 		return nil, errors.New("cannot consume non-sharing token" + token.Kind)
 	}
-	log.Printf("loading session (%s) from hub", event.SID)
-	session, err := tok.hub.Snapshot(event.SID, event.ctx)
+	log.Printf("loading session (%s) from hub", ctx.sid)
+	session, err := tok.hub.Snapshot(ctx.sid, ctx)
 	if err != nil {
 		// todo check if session has expired or anyhing
 		// maybe we want to proceed normaly with token
 		// even if provided session is dead for some reason
 		return nil, err
 	}
-	err = tok.addNoteRef(session.uid, token.NID, event.ctx)
+	err = tok.addNoteRef(session.uid, token.NID, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -212,20 +241,31 @@ func (tok *TokenConsumer) GetUID(sid string) (string, error) {
 	return tok.sessions.GetUID(sid)
 }
 
+func (tok *TokenConsumer) markConsumed(token Token) (err error) {
+	_, err = tok.db.Exec("UPDATE tokens SET times_consumed = times_consumed+1 WHERE token = ?", token.Key)
+	return
+}
+
 func (tok *TokenConsumer) getToken(plain string) (Token, error) {
 	h := sha512.New()
 	io.WriteString(h, plain)
 	hashed := hex.EncodeToString(h.Sum(nil))
 	log.Printf("Looking for token (byte: `%v`) with hash %s", tok, hashed)
-	token := Token{}
-	err := tok.db.QueryRow("SELECT token, kind, uid, nid, email, phone FROM tokens where token = ? AND consumed_at IS NULL", hashed).Scan(&token.Key, &token.Kind, &token.UID, &token.NID, &token.Email, &token.Phone)
+	t := Token{}
+	err := tok.db.QueryRow("SELECT token, kind, uid, nid, email, phone, valid_from, times_consumed FROM tokens where token = ?", hashed).Scan(&t.Key, &t.Kind, &t.UID, &t.NID, &t.Email, &t.Phone, &t.ValidFrom, &t.TimesConsumed)
 	if err == sql.ErrNoRows {
 		return Token{}, TokenDoesNotexistError(plain)
 	} else if err != nil {
 		return Token{}, err
 	}
-	log.Printf("retrieved token from db: %v\n", token)
-	return token, nil
+	if t.Expired() {
+		return Token{}, fmt.Errorf("token has expired")
+	}
+	if t.Exhausted() {
+		return Token{}, fmt.Errorf("token can only be consumed %d times", t.TimesConsumed)
+	}
+	log.Printf("retrieved token from db: %v\n", t)
+	return t, nil
 }
 
 func (tok *TokenConsumer) uidFromSID(sid string, onlyAnon bool) (uid string, err error) {

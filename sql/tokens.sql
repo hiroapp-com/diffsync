@@ -5,8 +5,8 @@ CREATE TABLE "tokens" (
     nid text default "",
     email text default "",
     phone text default "",
-    created_at timestamp default (datetime('now')),
-    consumed_at timestamp default NULL
+    valid_from timestamp default (datetime('now')),
+    times_consumed integer default 0
 );
 
 
