@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 
 	"database/sql"
 
@@ -279,20 +280,19 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 	reqData := map[string]string{"token": token, "nid": nid}
 	// get info from inviter
 	res := Resource{Kind: "profile", ID: ctx.uid}
-	inviter := User{}
 	if err := ctx.store.Load(&res); err != nil {
 		log.Printf("error: sendInvite could not fetch profile info of inviter; err: %v", err)
-	} else {
-		inviter = res.Value.(Profile).User
 	}
+	inviter := res.Value.(Profile).User
+	reqData["inviter_name"] = inviter.Name
+	reqData["inviter_email"] = inviter.Email
+	reqData["inviter_phone"] = inviter.Phone
 	// store hashed token and recipient-address
 	var err error
 	switch addr, addrKind := rcpt.Addr(); addrKind {
 	case "phone":
-		reqData["inviter_name"] = firstNonEmpty(inviter.Name, "Someone")
 		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, phone) VALUES (?, 'share', ?, ?, ?)", hashed, user.UID, nid, addr)
 	case "email":
-		reqData["inviter_name"] = firstNonEmpty(inviter.Name, "Someone")
 		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, email) VALUES (?, 'share', ?, ?, ?)", hashed, user.UID, nid, addr)
 	default:
 		log.Printf("warn: cannot invite user[%s]. no usable contanct-addr found", user.UID)
@@ -304,20 +304,23 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 	}
 
 	// collect info about the shared note
-	note := NewNote("")
 	res = Resource{Kind: "note", ID: nid}
 	if err = ctx.store.Load(&res); err != nil {
 		log.Printf("error: sendInvite could not fetch note info of shared note; err: %v", err)
-	} else {
-		note = res.Value.(Note)
 	}
-	if len(note.Text) > 500 {
-		reqData["peek"] = string(note.Text)[:500]
+	note := res.Value.(Note)
+	if txt := string(note.Text); len(txt) > 500 {
+		if i := strings.LastIndex(txt[:500], " "); i < 0 {
+			reqData["peek"] = txt[:500] + "..."
+		} else {
+			reqData["peek"] = txt[:i] + " ..."
+		}
 	} else {
-		reqData["peek"] = string(note.Text)
+		reqData["peek"] = txt
 	}
 	reqData["title"] = note.Title
 	reqData["num_peers"] = strconv.Itoa(len(note.Peers))
+	reqData["invitee_tier"] = strconv.Itoa(int(user.Tier))
 	req := comm.NewRequest("invite", rcpt, reqData)
 	if err = ctx.store.commHandler(req); err != nil {
 		log.Printf("error: sendInvite could not forward request to comm.Handler; err: %v", err)

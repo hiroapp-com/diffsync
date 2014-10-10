@@ -42,8 +42,7 @@ func (rcpt emailRcpt) Addr() (string, string) {
 	return User(rcpt).Email, "email"
 }
 func (rcpt emailRcpt) DisplayName() string {
-	u := User(rcpt)
-	return firstNonEmpty(u.Name, u.Email, "Anonymous")
+	return User(rcpt).Name
 }
 
 func (rcpt phoneRcpt) Addr() (string, string) {
@@ -51,8 +50,7 @@ func (rcpt phoneRcpt) Addr() (string, string) {
 }
 
 func (rcpt phoneRcpt) DisplayName() string {
-	u := User(rcpt)
-	return firstNonEmpty(u.Name, u.Phone, "Anonymous")
+	return User(rcpt).Name
 }
 
 func (rcpt preferredRcpt) Addr() (string, string) {
@@ -78,15 +76,7 @@ func (rcpt preferredRcpt) Addr() (string, string) {
 }
 
 func (rcpt preferredRcpt) DisplayName() string {
-	u := User(rcpt)
-	switch _, kind := rcpt.Addr(); kind {
-	case "email":
-		return firstNonEmpty(u.Name, u.Email, "Anonymous")
-	case "phone":
-		return firstNonEmpty(u.Name, u.Phone, "Anonymous")
-	default:
-		return ""
-	}
+	return User(rcpt).Name
 }
 
 func NewProfile() Profile {
