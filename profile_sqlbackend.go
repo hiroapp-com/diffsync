@@ -80,10 +80,10 @@ func createContact(uid1, uid2, name, email, phone string, db *sql.DB, ctx Contex
 	if _, err = db.Exec("INSERT INTO contacts (uid, contact_uid) VALUES(?, ?)", uid2, uid1); err != nil {
 		return
 	}
-	if err = ctx.Router.Handle(Event{UID: uid1, Name: "res-sync", Res: Resource{Kind: "profile", ID: uid1}}); err != nil {
+	if err = ctx.Router.Handle(Event{UID: uid1, Name: "res-sync", Res: Resource{Kind: "profile", ID: uid1}, ctx: ctx}); err != nil {
 		return
 	}
-	if err = ctx.Router.Handle(Event{UID: uid2, Name: "res-sync", Res: Resource{Kind: "profile", ID: uid2}}); err != nil {
+	if err = ctx.Router.Handle(Event{UID: uid2, Name: "res-sync", Res: Resource{Kind: "profile", ID: uid2}, ctx: ctx}); err != nil {
 		return
 	}
 	return nil
