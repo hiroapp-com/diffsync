@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS "users";
+DROP TABLE IF EXISTS "notes";
+DROP TABLE IF EXISTS "noterefs";
+DROP TABLE IF EXISTS "contacts";
+DROP TABLE IF EXISTS "sessions";
+DROP TABLE IF EXISTS "tokens";
+DROP TABLE IF EXISTS "stripe_tokens";
