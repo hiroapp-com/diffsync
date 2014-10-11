@@ -21,7 +21,7 @@ func NewFolioSQLBackend(db *sql.DB) FolioSQLBackend {
 
 func (backend FolioSQLBackend) Get(uid string) (ResourceValue, error) {
 	folio := Folio{}
-	rows, err := backend.db.Query("SELECT nid, status, tmp_nid FROM noterefs WHERE uid = ? ", uid)
+	rows, err := backend.db.Query("SELECT nid, status, tmp_nid FROM noterefs WHERE uid = $1 ", uid)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, result *SyncResult
 		// patch.Path contains Note ID
 		// patch.Value empty
 		// patch.OldValue empty
-		_, err := backend.db.Exec("DELETE FROM noteref WHERE nid = ? AND uid = ?", patch.Path, uid)
+		_, err := backend.db.Exec("DELETE FROM noteref WHERE nid = $1 AND uid = $2", patch.Path, uid)
 		if err != nil {
 			return err
 		}
@@ -60,7 +60,7 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, result *SyncResult
 		if !(status == "active" || status == "archived") {
 			return fmt.Errorf("folioSQLbackend: received invalid status: %s", status)
 		}
-		_, err := backend.db.Exec("UPDATE noterefs SET status = ? WHERE nid = ? and status = ?", status, patch.Path, patch.OldValue.(string))
+		_, err := backend.db.Exec("UPDATE noterefs SET status = $1 WHERE nid = $2 and status = $3", status, patch.Path, patch.OldValue.(string))
 		if err != nil {
 			return fmt.Errorf("folioSQLbackend: uid(%s) status change for nid(%s): could not persist new status: `%s`", uid, patch.Path, status)
 		}
@@ -80,7 +80,7 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, result *SyncResult
 			}
 			ref.tmpNID = ref.NID
 			ref.NID = newnote.ID
-			if res, err = backend.db.Exec("UPDATE noterefs SET tmp_nid = ?, status = ?, role = 'owner' WHERE uid = ? and nid = ?",
+			if res, err = backend.db.Exec("UPDATE noterefs SET tmp_nid = $1, status = $2, role = 'owner' WHERE uid = $3 and nid = $4",
 				ref.tmpNID,
 				ref.Status,
 				uid,
@@ -90,7 +90,7 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, result *SyncResult
 			}
 		} else {
 			// add existing note to folio
-			if res, err = backend.db.Exec("INSERT INTO noterefs (uid, nid, status, role) VALUES (?, ?, 'active', 'peer')", uid, ref.NID); err != nil {
+			if res, err = backend.db.Exec("INSERT INTO noterefs (uid, nid, status, role) VALUES ($1, $2, 'active', 'peer')", uid, ref.NID); err != nil {
 				return err
 			}
 		}

@@ -459,7 +459,8 @@ func (sess *Session) Grant(ctx Context, action string, res Resource) bool {
 }
 
 func (s *Session) Value() (driver.Value, error) {
-	return s.MarshalJSON()
+	bs, err := s.MarshalJSON()
+	return string(bs), err
 }
 
 func (s *Session) Scan(value interface{}) error {

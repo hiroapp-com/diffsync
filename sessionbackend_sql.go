@@ -20,7 +20,7 @@ func NewSQLSessions(db *sql.DB) *SQLSessions {
 
 func (store *SQLSessions) Get(sid string) (*Session, error) {
 	session := NewSession(sid, "")
-	err := store.db.QueryRow("SELECT data FROM sessions where sid = ?", sid).Scan(session)
+	err := store.db.QueryRow("SELECT data FROM sessions where sid = $1", sid).Scan(session)
 	if err == sql.ErrNoRows {
 		//store.Release(session)
 		return nil, SessionIDInvalidErr{sid}
@@ -35,7 +35,7 @@ func (store *SQLSessions) Get(sid string) (*Session, error) {
 func (store *SQLSessions) Save(session *Session) error {
 	// is an upsert, needs doc
 	log.Printf("saving session `%s`, %v", session.sid, *session)
-	res, err := store.db.Exec("UPDATE sessions SET uid = ?, data = ? WHERE sid = ?", session.uid, session, session.sid)
+	res, err := store.db.Exec("UPDATE sessions SET uid = $1, data = cast($2 as text) WHERE sid = $3", session.uid, session, session.sid)
 	if err != nil {
 		return err
 	}
@@ -45,13 +45,13 @@ func (store *SQLSessions) Save(session *Session) error {
 		return nil
 	}
 	// nothing was updated, need to create session
-	_, err = store.db.Exec("INSERT INTO sessions (sid, uid, data) VALUES (?, ?, ?)", session.sid, session.uid, session)
+	_, err = store.db.Exec("INSERT INTO sessions (sid, uid, data) VALUES ($1, $2, $3)", session.sid, session.uid, session)
 	return err
 }
 
 func (store *SQLSessions) Delete(sid string) error {
 	log.Printf("deleting session `%s`", sid)
-	_, err := store.db.Exec("DELETE FROM sessions WHERE sid = ?", sid)
+	_, err := store.db.Exec("DELETE FROM sessions WHERE sid = $1", sid)
 	return err
 }
 
@@ -104,7 +104,7 @@ func (store *SQLSessions) subsByQuery(res Resource, qry string, args ...interfac
 
 func (store *SQLSessions) SessionsOfUser(uid string) ([]string, error) {
 	sids := []string{}
-	rows, err := store.db.Query("SELECT sid FROM sessions WHERE uid = ?", uid)
+	rows, err := store.db.Query("SELECT sid FROM sessions WHERE uid = $1", uid)
 	if err != nil {
 		return sids, err
 	}
@@ -123,7 +123,7 @@ func (store *SQLSessions) GetSubscriptions(res Resource) (map[string]Resource, e
 	switch res.Kind {
 	case "note":
 		// get all sessions of all users who have a noteref for this note
-		return store.subsByQuery(res, "SELECT uid FROM noterefs WHERE nid = ?", res.ID)
+		return store.subsByQuery(res, "SELECT uid FROM noterefs WHERE nid = $1", res.ID)
 	case "folio":
 		// get all sessions of this folio's user
 		return map[string]Resource{res.ID: res}, nil
@@ -131,13 +131,13 @@ func (store *SQLSessions) GetSubscriptions(res Resource) (map[string]Resource, e
 		// first get all session of this profile's user
 		return store.subsByQuery(Resource{Kind: "profile"}, `SELECT uid 
 										                      FROM users 
-									                          WHERE uid = ?
-										                        OR uid in (SELECT uid FROM contacts WHERE contact_uid = ?)
+									                          WHERE uid = $1 
+										                        OR uid in (SELECT uid FROM contacts WHERE contact_uid = $1)
 										                        OR uid in (SELECT nr.uid 
 										                     		      FROM noterefs as nr
 										                     				 LEFT OUTER JOIN noterefs as nr2
-										                     				  ON nr.nid = nr2.nid AND nr2.uid = ?
-										                     			  WHERE nr.uid <> ? AND nr2.uid is not null)`, res.ID, res.ID, res.ID, res.ID)
+										                     				  ON nr.nid = nr2.nid AND nr2.uid = $1
+										                     			  WHERE nr.uid <> $1 AND nr2.uid is not null)`, res.ID)
 	}
 	return map[string]Resource{}, nil
 }

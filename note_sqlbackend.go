@@ -27,7 +27,7 @@ func NewNoteSQLBackend(db *sql.DB) NoteSQLBackend {
 func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 	note := NewNote("")
 	var txt string
-	err := backend.db.QueryRow("SELECT title, txt, sharing_token FROM notes WHERE nid = ?", key).Scan(&note.Title, &txt, &note.SharingToken)
+	err := backend.db.QueryRow("SELECT title, txt, sharing_token FROM notes WHERE nid = $1", key).Scan(&note.Title, &txt, &note.SharingToken)
 	switch {
 	case err == sql.ErrNoRows:
 		return nil, NoExistError{key}
@@ -45,7 +45,7 @@ func (backend NoteSQLBackend) Get(key string) (ResourceValue, error) {
 								    FROM noterefs as nr 
 									  LEFT JOIN users as u1
 									    ON u1.uid = nr.uid
-									WHERE nid = ? 
+									WHERE nid = $1 
 									  AND tier > -2`, key)
 	if err != nil {
 		return nil, err
@@ -83,7 +83,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		// patch.Path empty
 		// patch.Value contains new Title
 		// patch.OldValue contains old Title, for reference
-		res, err := backend.db.Exec("UPDATE notes SET title = ? WHERE nid = ? and title = ?", patch.Value.(string), nid, patch.OldValue.(string))
+		res, err := backend.db.Exec("UPDATE notes SET title = $1 WHERE nid = $2 and title = $3", patch.Value.(string), nid, patch.OldValue.(string))
 		if err != nil {
 			return fmt.Errorf("notesqlbackend: note(%s) title could not be set. old: `%s` new `%s`", nid, patch.OldValue.(string), patch.Value.(string))
 		}
@@ -147,7 +147,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if u == nil {
 			panic("NULLUSER WTF?!")
 		}
-		res, err := backend.db.Exec("INSERT INTO noterefs (nid, uid, role, status) VALUES(?, ?, 'peer', 'active')", nid, u.UID)
+		res, err := backend.db.Exec("INSERT INTO noterefs (nid, uid, role, status) VALUES($1, $2, 'peer', 'active')", nid, u.UID)
 		if err != nil {
 			return fmt.Errorf("could not create note-ref for invitee: nid: %s, uid: %s", nid, u.UID)
 		}
@@ -170,7 +170,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if patch.Path != ctx.uid {
 			return fmt.Errorf("notesqlbackend: cannot set cursor for other user than context user. ctx.uid:%s peer-uid: %s", ctx.uid, patch.Path)
 		}
-		_, err := backend.db.Exec("UPDATE noterefs SET cursor_pos = ? WHERE nid = ? AND uid = ? AND cursor_pos = ?", patch.Value.(int64), nid, patch.Path, patch.OldValue.(int64))
+		_, err := backend.db.Exec("UPDATE noterefs SET cursor_pos = $1 WHERE nid = $2 AND uid = $3 AND cursor_pos = $4", patch.Value.(int64), nid, patch.Path, patch.OldValue.(int64))
 		if err != nil {
 			return err
 		}
@@ -179,7 +179,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		// patch.Path contains UID of peer to remove
 		// patch.Value empty
 		// patch.OldValue empty
-		_, err := backend.db.Exec("DELETE FROM noterefs WHERE nid = ? AND uid = ?", nid, patch.Path)
+		_, err := backend.db.Exec("DELETE FROM noterefs WHERE nid = $1 AND uid = $2", nid, patch.Path)
 		if err != nil {
 			return err
 		}
@@ -201,7 +201,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		// patch.Path contains old peer's UID
 		// patch.Value new peer's UID
 		// patch.OldValue empty
-		res, err := backend.db.Exec("UPDATE noterefs SET uid = ? WHERE nid = ? AND uid = ?", patch.Value, nid, patch.Path)
+		res, err := backend.db.Exec("UPDATE noterefs SET uid = $1 WHERE nid = $2 AND uid = $3", patch.Value, nid, patch.Path)
 		if err != nil {
 			return err
 		}
@@ -222,19 +222,19 @@ func (backend NoteSQLBackend) CreateEmpty(ctx Context) (string, error) {
 	note := NewNote("")
 	nid := generateNID()
 	token, hashed := generateToken()
-	_, err := backend.db.Exec("INSERT INTO notes (nid, title, txt, sharing_token, created_by) VALUES (?, ?, ?, ?, ?)", nid, note.Title, string(note.Text), token, ctx.uid)
+	_, err := backend.db.Exec("INSERT INTO notes (nid, title, txt, sharing_token, created_by) VALUES ($1, $2, $3, $4, $5)", nid, note.Title, string(note.Text), token, ctx.uid)
 	if err != nil {
 		return "", err
 	}
 	// cleanup, fire and forget
-	backend.db.Exec("DELETE FROM tokens WHERE uid = '' and nid = ? and kind = 'share'", nid)
+	backend.db.Exec("DELETE FROM tokens WHERE uid = '' and nid = $1 and kind = 'share'", nid)
 	// create token
-	if _, err := backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES (?, 'share-url', '', ?)", hashed, nid); err != nil {
+	if _, err := backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES ($1, 'share-url', '', $2)", hashed, nid); err != nil {
 		return "", nil
 	}
 	// already create a noteref (i.e. add to user's folio) if uid provided in context
 	if ctx.uid != "" {
-		backend.db.Exec("INSERT INTO noterefs (uid, nid, status, role) VALUES (?, ?, 'active', 'owner')", ctx.uid, nid)
+		backend.db.Exec("INSERT INTO noterefs (uid, nid, status, role) VALUES ($1, $2, 'active', 'owner')", ctx.uid, nid)
 	}
 	return nid, nil
 }
@@ -245,7 +245,7 @@ func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch, result *Sy
 		return err
 	}
 	var original string
-	switch err := txn.QueryRow("SELECT txt FROM notes WHERE nid = ?", id).Scan(&original); {
+	switch err := txn.QueryRow("SELECT txt FROM notes WHERE nid = $1", id).Scan(&original); {
 	case err == sql.ErrNoRows:
 		txn.Rollback()
 		return NoExistError{id}
@@ -254,7 +254,7 @@ func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch, result *Sy
 		return err
 	}
 	patched, _ := dmp.PatchApply(patch, original)
-	if _, err := txn.Exec("UPDATE notes SET txt = ? WHERE nid = ?", patched, id); err != nil {
+	if _, err := txn.Exec("UPDATE notes SET txt = $1 WHERE nid = $2", patched, id); err != nil {
 		txn.Rollback()
 		return err
 	}
@@ -267,9 +267,9 @@ func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch, result *Sy
 
 func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx Context) (err error) {
 	if edited {
-		_, err = backend.db.Exec("UPDATE noterefs SET last_seen = datetime('now'), last_edit = datetime('now') WHERE nid = ? AND uid = ?", id, ctx.uid)
+		_, err = backend.db.Exec("UPDATE noterefs SET last_seen = NOW(), last_edit = NOW() WHERE nid = $1 AND uid = $2", id, ctx.uid)
 	} else {
-		_, err = backend.db.Exec("UPDATE noterefs SET last_seen = datetime('now') WHERE nid = ? AND uid = ?", id, ctx.uid)
+		_, err = backend.db.Exec("UPDATE noterefs SET last_seen = NOW() WHERE nid = $1 AND uid = $2", id, ctx.uid)
 	}
 	return
 }
@@ -291,9 +291,9 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 	var err error
 	switch addr, addrKind := rcpt.Addr(); addrKind {
 	case "phone":
-		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, phone) VALUES (?, 'share', ?, ?, ?)", hashed, user.UID, nid, addr)
+		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, phone) VALUES ($1, 'share', $2, $3, $4)", hashed, user.UID, nid, addr)
 	case "email":
-		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, email) VALUES (?, 'share', ?, ?, ?)", hashed, user.UID, nid, addr)
+		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, email) VALUES ($1, 'share', $2, $3, $4)", hashed, user.UID, nid, addr)
 	default:
 		log.Printf("warn: cannot invite user[%s]. no usable contanct-addr found", user.UID)
 		return
