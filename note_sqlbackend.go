@@ -197,23 +197,6 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
 		result.Tainted(Resource{Kind: "note", ID: nid})
-	case "change-peer-uid":
-		// patch.Path contains old peer's UID
-		// patch.Value new peer's UID
-		// patch.OldValue empty
-		res, err := backend.db.Exec("UPDATE noterefs SET uid = ? WHERE nid = ? AND uid = ?", patch.Value, nid, patch.Path)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			ctx.Router.Handle(Event{UID: patch.Value.(string), Name: "res-add", Res: Resource{Kind: "note", ID: nid}, ctx: ctx})
-			ctx.Router.Handle(Event{UID: patch.Path, Name: "res-remove", Res: Resource{Kind: "note", ID: nid}, ctx: ctx})
-			// n.b. we're omitting the res-taint for the previous owner's folio here.
-			// this method is supposed to be used for takeover of anon-session's notes
-			// on login/signup so the old session and user get discarded and never used again.
-			result.Tainted(Resource{Kind: "folio", ID: patch.Value.(string)})
-			result.Tainted(Resource{Kind: "note", ID: nid})
-		}
 	}
 	return nil
 }

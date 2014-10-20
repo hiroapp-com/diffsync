@@ -423,50 +423,6 @@ func (tok *TokenConsumer) addNoteRef(uid, nid string, ctx Context) error {
 	return nil
 }
 
-func (tok *TokenConsumer) stealNoteRef(sid, uid string, ctx Context) error {
-	s, err := tok.hub.Snapshot(sid, ctx)
-	switch err := err.(type) {
-	case ResponseTimeoutErr:
-		// we couldn't load the sessin due to
-		// slow/unresponsive session. if we ignore this,
-		// old session data might get lost.
-		// instead, fail hard and let the client retry later
-		log.Printf("token: FATAL backend timed out during snapshot request. sid: `%s`", sid)
-		return err
-	case SessionIDInvalidErr:
-		// provided SID is (for some reason) considered invalid
-		// we will simply ignore the sid and not import any data,
-		// but proceed normally
-	default:
-		return err
-	case nil:
-		// no error, continue
-	}
-	p := Resource{Kind: "profile", ID: s.uid}
-	if err = ctx.store.Load(&p); err != nil {
-		return err
-	}
-	if p.Value.(Profile).User.Tier != 0 {
-		// only merge data from anon sessions
-		return nil
-	}
-	res := NewSyncResult()
-	for _, shadow := range s.shadows {
-		// only extract notes
-		if shadow.res.Kind == "note" {
-			if err = ctx.store.Patch(shadow.res, Patch{Op: "change-peer-uid", Path: s.uid, Value: uid}, res, ctx); err != nil {
-				return err
-			}
-		}
-	}
-	if len(res.TaintedItems()) > 0 {
-		for _, res := range res.TaintedItems() {
-			ctx.Router.Handle(Event{Name: "res-sync", Res: res, ctx: ctx})
-		}
-	}
-	return nil
-}
-
 func (err TokenDoesNotexistError) Error() string {
 	return fmt.Sprintf("token `%s` invalid or expired", string(err))
 }
