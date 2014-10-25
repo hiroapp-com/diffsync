@@ -27,6 +27,12 @@ func (err EventTimeoutError) Error() string {
 	return "event timed out"
 }
 
+type Remark struct {
+	Level   string            `json:"lvl"`
+	Message string            `json:"msg"`
+	Data    map[string]string `json:"data,omitempty"`
+}
+
 // Event defines the main datastructure used for communication between all components
 //
 // All incoming client messages are of type Event and all the parts
@@ -67,7 +73,7 @@ type Event struct {
 	// if the tag receives a response, the resource can be untagged. If a different tag
 	// arrives, we know that two sync cycles have been initiated simultaneously by the
 	// server and the client
-	Tag string `json:"tag, omitempty"`
+	Tag string `json:"tag,omitempty"`
 
 	// A HiroToken to use for any login and sharing flows
 	//
@@ -92,6 +98,8 @@ type Event struct {
 	// See SessionData.MarshalJSON for more info about its layout
 	Session *Session `json:"session,omitempty"`
 
+	Remark *Remark `json:"remark,omitempty"`
+
 	// A channel that wants from now on receive client-responses to this
 	// event and any further events for this Event's SID
 	//
@@ -109,13 +117,14 @@ func NewEvent() Event {
 }
 
 func (event Event) String() string {
-	return fmt.Sprintf("<event %s res: %s, sid: %s, tag: %s, token: %s, changes: %s, session: %s>",
+	return fmt.Sprintf("<event %s res: %s, sid: %s, tag: %s, token: %s, changes: %s, remark: %s, session: %s>",
 		event.Name,
 		event.Res.StringRef(),
 		event.SID,
 		event.Tag,
 		event.Token,
 		event.Changes,
+		event.Remark,
 		event.Session,
 	)
 }

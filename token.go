@@ -45,8 +45,6 @@ func (t Token) Exhausted() bool {
 	return t.TimesConsumed > 0
 }
 
-type TokenDoesNotexistError string
-
 type TokenConsumer struct {
 	db       *sql.DB
 	hub      *SessionHub
@@ -63,7 +61,11 @@ func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
 	case "session-create":
 		token, err := tok.getToken(event.Token)
 		if err != nil {
-			return err
+			event.ctx.LogInfo("Consumation of token `%s` failed with error: %s", event.Token, err)
+			event.Remark = &Remark{Level: "error", Message: err.Error()}
+			log.Println(event)
+			event.ctx.Client.Handle(event)
+			return nil
 		}
 		event.ctx.sid = event.SID
 		session, err = tok.createSession(token, event.ctx)
@@ -84,7 +86,10 @@ func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
 	case "token-consume":
 		token, err := tok.getToken(event.Token)
 		if err != nil {
-			return err
+			event.ctx.LogInfo("Consumation of token `%s` failed with error: %s", event.Token, err)
+			event.Remark = &Remark{Level: "error", Message: err.Error()}
+			event.ctx.Client.Handle(event)
+			return nil
 		}
 		event.ctx.sid = event.SID
 		session, err := tok.consumeToken(token, event.ctx)
@@ -254,15 +259,15 @@ func (tok *TokenConsumer) getToken(plain string) (Token, error) {
 	t := Token{}
 	err := tok.db.QueryRow("SELECT token, kind, uid, nid, email, phone, valid_from, times_consumed FROM tokens where token = ?", hashed).Scan(&t.Key, &t.Kind, &t.UID, &t.NID, &t.Email, &t.Phone, &t.ValidFrom, &t.TimesConsumed)
 	if err == sql.ErrNoRows {
-		return Token{}, TokenDoesNotexistError(plain)
+		return Token{}, fmt.Errorf("Token not found or invalid")
 	} else if err != nil {
 		return Token{}, err
 	}
 	if t.Expired() {
-		return Token{}, fmt.Errorf("token has expired")
+		return Token{}, fmt.Errorf("Token has expired")
 	}
 	if t.Exhausted() {
-		return Token{}, fmt.Errorf("token can only be consumed %d times", t.TimesConsumed)
+		return Token{}, fmt.Errorf("Token can only be consumed %d times", t.TimesConsumed)
 	}
 	log.Printf("retrieved token from db: %v\n", t)
 	return t, nil
@@ -421,10 +426,6 @@ func (tok *TokenConsumer) addNoteRef(uid, nid string, ctx Context) error {
 		}
 	}
 	return nil
-}
-
-func (err TokenDoesNotexistError) Error() string {
-	return fmt.Sprintf("token `%s` invalid or expired", string(err))
 }
 
 func generateToken() (string, string) {

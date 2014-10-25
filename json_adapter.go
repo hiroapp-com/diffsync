@@ -49,6 +49,7 @@ func (a jsonAdapter) EventToMsg(ev Event) ([]byte, error) {
 	a.buf.SID = ev.SID
 	a.buf.Tag = ev.Tag
 	a.buf.Token = ev.Token
+	a.buf.Remark = ev.Remark
 	a.buf.Changes = make([]jsonEdit, len(ev.Changes))
 	for i, edit := range ev.Changes {
 		rawDelta, err := json.Marshal(edit.Delta)
@@ -116,6 +117,7 @@ type jsonMsg struct {
 	Token   string                 `json:"token,omitempty"`
 	Changes []jsonEdit             `json:"changes,omitempty"`
 	Res     *jsonResource          `json:"res,omitempty"`
+	Remark  *Remark                `json:"remark,omitempty"`
 	Session map[string]interface{} `json:"session,omitempty"`
 }
 
