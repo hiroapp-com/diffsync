@@ -135,16 +135,16 @@ func (tok *TokenConsumer) createSession(token Token, ctx Context) (*Session, err
 		}
 		u := profile.Value.(Profile).User
 		if token.Email == u.Email && u.EmailStatus == "unverified" {
-			if _, err = tok.db.Exec("UPDATE users SET email_status = 'verified' WHERE uid = ?", token.UID); err != nil {
+			if _, err = tok.db.Exec("UPDATE users SET email_status = 'verified' WHERE uid = $1", token.UID); err != nil {
 				return nil, err
 			}
 		} else if token.Phone == u.Phone && u.PhoneStatus == "unverified" {
-			if _, err = tok.db.Exec("UPDATE users SET phone_status = 'verified' WHERE uid = ?", token.UID); err != nil {
+			if _, err = tok.db.Exec("UPDATE users SET phone_status = 'verified' WHERE uid = $1", token.UID); err != nil {
 				return nil, err
 			}
 		}
 		if u.Tier < 0 {
-			if _, err = tok.db.Exec("UPDATE users SET tier = 0 WHERE uid = ?", token.UID); err != nil {
+			if _, err = tok.db.Exec("UPDATE users SET tier = 0 WHERE uid = $1", token.UID); err != nil {
 				return nil, err
 			}
 		}
@@ -247,7 +247,7 @@ func (tok *TokenConsumer) GetUID(sid string) (string, error) {
 }
 
 func (tok *TokenConsumer) markConsumed(token Token) (err error) {
-	_, err = tok.db.Exec("UPDATE tokens SET times_consumed = times_consumed+1 WHERE token = ?", token.Key)
+	_, err = tok.db.Exec("UPDATE tokens SET times_consumed = times_consumed+1 WHERE token = $1", token.Key)
 	return
 }
 
@@ -257,7 +257,7 @@ func (tok *TokenConsumer) getToken(plain string) (Token, error) {
 	hashed := hex.EncodeToString(h.Sum(nil))
 	log.Printf("Looking for token (byte: `%v`) with hash %s", tok, hashed)
 	t := Token{}
-	err := tok.db.QueryRow("SELECT token, kind, uid, nid, email, phone, valid_from, times_consumed FROM tokens where token = ?", hashed).Scan(&t.Key, &t.Kind, &t.UID, &t.NID, &t.Email, &t.Phone, &t.ValidFrom, &t.TimesConsumed)
+	err := tok.db.QueryRow("SELECT token, kind, uid, nid, email, phone, valid_from, times_consumed FROM tokens where token = $1", hashed).Scan(&t.Key, &t.Kind, &t.UID, &t.NID, &t.Email, &t.Phone, &t.ValidFrom, &t.TimesConsumed)
 	if err == sql.ErrNoRows {
 		return Token{}, fmt.Errorf("Token not found or invalid")
 	} else if err != nil {
@@ -275,9 +275,9 @@ func (tok *TokenConsumer) getToken(plain string) (Token, error) {
 
 func (tok *TokenConsumer) uidFromSID(sid string, onlyAnon bool) (uid string, err error) {
 	if onlyAnon {
-		err = tok.db.QueryRow("SELECT sessions.uid FROM sessions LEFT JOIN users ON users.uid = sessions.uid WHERE sid = ? AND users.tier = 0", sid).Scan(&uid)
+		err = tok.db.QueryRow("SELECT sessions.uid FROM sessions LEFT JOIN users ON users.uid = sessions.uid WHERE sid = $1 AND users.tier = 0", sid).Scan(&uid)
 	} else {
-		err = tok.db.QueryRow("SELECT sessions.uid FROM sessions WHERE sid = ?", sid).Scan(&uid)
+		err = tok.db.QueryRow("SELECT sessions.uid FROM sessions WHERE sid = $1", sid).Scan(&uid)
 	}
 	if err == sql.ErrNoRows {
 		// return no error but empty uid if no result
@@ -297,7 +297,7 @@ func (tok *TokenConsumer) assimilateUser(uidMan, uidBorg string, ctx Context) er
 		return err
 	}
 	// get all note-ids which we will take over, so we can taint them later
-	rs, err := txn.Query("SELECT nid FROM noterefs WHERE uid = ?", uidMan)
+	rs, err := txn.Query("SELECT nid FROM noterefs WHERE uid = $1", uidMan)
 	if err != nil {
 		txn.Rollback()
 		return err
@@ -312,22 +312,22 @@ func (tok *TokenConsumer) assimilateUser(uidMan, uidBorg string, ctx Context) er
 		nids = append(nids, nid)
 	}
 	// now change those noterefs to the claiming UID
-	if _, err = txn.Exec("UPDATE noterefs SET uid = ? WHERE uid = ?", uidBorg, uidMan); err != nil {
+	if _, err = txn.Exec("UPDATE noterefs SET uid = $1 WHERE uid = $2", uidBorg, uidMan); err != nil {
 		txn.Rollback()
 		return err
 	}
 	// also claim all his contacts...
-	if _, err = txn.Exec("UPDATE contacts SET uid = ? WHERE uid = ?", uidBorg, uidMan); err != nil {
+	if _, err = txn.Exec("UPDATE contacts SET uid = $1 WHERE uid = $2", uidBorg, uidMan); err != nil {
 		txn.Rollback()
 		return err
 	}
 	// ...symmetrically
-	if _, err = txn.Exec("UPDATE contacts SET contact_uid = ? WHERE contact_uid = ?", uidBorg, uidMan); err != nil {
+	if _, err = txn.Exec("UPDATE contacts SET contact_uid = $1 WHERE contact_uid = $2", uidBorg, uidMan); err != nil {
 		txn.Rollback()
 		return err
 	}
 	// mark all other users with his email as disabled (tier -2)
-	if _, err = txn.Exec("UPDATE users SET tier = -2 WHERE uid = ?", uidMan); err != nil {
+	if _, err = txn.Exec("UPDATE users SET tier = -2 WHERE uid = $1", uidMan); err != nil {
 		txn.Rollback()
 		return err
 	}
@@ -357,7 +357,7 @@ func (tok *TokenConsumer) claimIDAndSignup(id string, user User, ctx Context) er
 		return strings.Replace(qry, "$FIELD$", id, -1)
 	}
 	// get all note-ids which we will take over, so we can taint them later
-	rs, err := txn.Query(f("SELECT uid, nid FROM noterefs WHERE uid IN (SELECT uid FROM users WHERE uid <> ? AND $FIELD$ = ?)"), user.UID, v)
+	rs, err := txn.Query(f("SELECT uid, nid FROM noterefs WHERE uid IN (SELECT uid FROM users WHERE uid <> $1 AND $FIELD$ = $2)"), user.UID, v)
 	if err != nil {
 		txn.Rollback()
 		return err
@@ -373,32 +373,32 @@ func (tok *TokenConsumer) claimIDAndSignup(id string, user User, ctx Context) er
 		nids = append(nids, [2]string{uid, nid})
 	}
 	// now change those noterefs to the claiming UID
-	if _, err = txn.Exec(f("UPDATE noterefs SET uid = ? WHERE uid IN (select uid from users WHERE uid <> ? and $FIELD$ = ?)"), user.UID, user.UID, v); err != nil {
+	if _, err = txn.Exec(f("UPDATE noterefs SET uid = $1 WHERE uid IN (select uid from users WHERE uid <> $1 and $FIELD$ = $2)"), user.UID, v); err != nil {
 		txn.Rollback()
 		return err
 	}
 	// also claim all his contacts...
-	if _, err = txn.Exec(f("UPDATE contacts SET uid = ? WHERE uid IN (select uid from users WHERE uid <> ? and $FIELD$ = ?)"), user.UID, user.UID, v); err != nil {
+	if _, err = txn.Exec(f("UPDATE contacts SET uid = $1 WHERE uid IN (select uid from users WHERE uid <> $1 and $FIELD$ = $2)"), user.UID, v); err != nil {
 		txn.Rollback()
 		return err
 	}
 	// ...symmetrically
-	if _, err = txn.Exec(f("UPDATE contacts SET contact_uid = ? WHERE contact_uid IN (select uid from users WHERE uid <> ? and $FIELD$ = ?)"), user.UID, user.UID, v); err != nil {
+	if _, err = txn.Exec(f("UPDATE contacts SET contact_uid = $1 WHERE contact_uid IN (select uid from users WHERE uid <> $1 and $FIELD$ = $2)"), user.UID, v); err != nil {
 		txn.Rollback()
 		return err
 	}
 	// mark all other users with his email as disabled (tier -2)
-	if _, err = txn.Exec(f("UPDATE users SET tier = -2 WHERE uid IN (select uid from users WHERE uid <> ? and $FIELD$ = ?)"), user.UID, v); err != nil {
+	if _, err = txn.Exec(f("UPDATE users SET tier = -2 WHERE uid IN (select uid from users WHERE uid <> $1 and $FIELD$ = $2)"), user.UID, v); err != nil {
 		txn.Rollback()
 		return err
 	}
 	// and set claiming user's email status to verified
-	if _, err = txn.Exec(f("UPDATE users SET $FIELD$_status = 'verified' WHERE uid = ?"), user.UID); err != nil {
+	if _, err = txn.Exec(f("UPDATE users SET $FIELD$_status = 'verified' WHERE uid = $1"), user.UID); err != nil {
 		txn.Rollback()
 		return err
 	}
 	// sign him up!
-	if _, err = txn.Exec("UPDATE users SET tier = 1 WHERE uid = ?", user.UID); err != nil {
+	if _, err = txn.Exec("UPDATE users SET tier = 1 WHERE uid = $1", user.UID); err != nil {
 		txn.Rollback()
 		return err
 	}

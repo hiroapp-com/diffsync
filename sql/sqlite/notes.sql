@@ -3,6 +3,6 @@ CREATE TABLE "notes" (
     title text default "",
     txt text default "",
     sharing_token text default "",
-    created_at timestamp default (datetime('now')),
+    created_at timestamp default NOW(),
     created_by text default ""
 );
