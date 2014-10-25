@@ -25,11 +25,14 @@ func NewServer(db *sql.DB, handler comm.Handler) (*Server, error) {
 	return srv, nil
 }
 
-func (srv *Server) Handle(event Event) error {
+func (srv *Server) Handle(event Event) (err error) {
 	event.ctx.ts = time.Now()
 	event.ctx.store = srv.Store
 	event.ctx.Router = RouteHandler{srv.sessionHub}
-	return srv.tokenConsumer.Handle(event, RouteHandler{srv.sessionHub})
+	if err = srv.tokenConsumer.Handle(event, RouteHandler{srv.sessionHub}); err != nil {
+		event.ctx.LogError(err)
+	}
+	return
 }
 
 func (srv *Server) Run() {

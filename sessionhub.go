@@ -61,7 +61,6 @@ func feedInbox(ch chan<- Event, e Event) error {
 	case ch <- e:
 		return nil
 	case <-time.After(5 * time.Second):
-		// ROLLUP
 		return TimeoutError{"sessionhub inbox not responding whithin time"}
 	}
 }
@@ -197,10 +196,13 @@ func checkInbox(inbox <-chan Event, session *Session, hub *SessionHub) {
 	if session == nil {
 		panic("NILSESSION")
 	}
-	defer func(sid string, done chan string) {
+	defer func(sid, uid string, done chan string) {
+		if e := recover(); e != nil {
+			(Context{uid: uid}).LogCritical(fmt.Errorf("runtime panic: %v", e))
+		}
 		//signal shuwdown of runner to hub
 		done <- sid
-	}(session.sid, hub.runner_done)
+	}(session.sid, session.uid, hub.runner_done)
 
 	log.Printf("(sessionhub starting runner for %s)", session.sid)
 	saveTicker := time.Tick(1 * time.Minute)
