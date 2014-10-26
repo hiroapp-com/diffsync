@@ -100,7 +100,7 @@ func (a jsonAdapter) Demux(msg []byte) ([][]byte, error) {
 }
 
 type jsonEdit struct {
-	Clock    SessionClock    `json:"clock"`
+	Clock    `json:"clock"`
 	RawDelta json.RawMessage `json:"delta"`
 }
 

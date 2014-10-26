@@ -13,24 +13,24 @@ type SyncResult struct {
 type Shadow struct {
 	res     Resource
 	pending []Edit
-	SessionClock
+	Clock
 }
 
 type Edit struct {
-	Clock  SessionClock  `json:"clock"`
 	Delta  Delta         `json:"delta"`
 	Backup ResourceValue `json:"backup"`
+	Clock  `json:"clock"`
 }
 
 func (e Edit) String() string {
-	return fmt.Sprintf("<edit cv/sv: %d/%d, delta: %s>", e.Clock.CV, e.Clock.SV, e.Delta)
+	return fmt.Sprintf("<edit cv/sv: %d/%d, delta: %s>", e.CV, e.SV, e.Delta)
 }
 
 func NewShadow(res Resource) *Shadow {
 	return &Shadow{
-		res:          res,
-		pending:      []Edit{},
-		SessionClock: SessionClock{},
+		res:     res,
+		pending: []Edit{},
+		Clock:   Clock{},
 	}
 }
 
@@ -62,15 +62,27 @@ func (shadow *Shadow) UpdatePending(forceEmptyDelta bool, store *Store) bool {
 	delta := shadow.res.Value.GetDelta(res.Value)
 	log.Printf("shadow[%s]: found delta: `%s`\n", res.StringRef(), delta)
 	if delta.HasChanges() {
-		shadow.AddEdit(Edit{shadow.SessionClock.Clone(), delta, shadow.res.Value})
+		shadow.AddEdit(Edit{delta, shadow.res.Value, shadow.Clock.Clone()})
 		shadow.res = res
-		shadow.IncSv()
+		shadow.SV++
 		return true
 	} else if forceEmptyDelta {
-		shadow.AddEdit(Edit{shadow.SessionClock.Clone(), delta, shadow.res.Value})
+		shadow.AddEdit(Edit{delta, shadow.res.Value, shadow.Clock.Clone()})
 		return true
 	}
 	return false
+}
+
+func (s *Shadow) cvCheck(cv int64) (is_dupe bool, err error) {
+	switch {
+	case s.CV == cv:
+		return false, nil
+	case s.CV > cv:
+		return true, nil
+	case s.CV < cv:
+		return false, ErrCVDiverged{cv, s.CV}
+	}
+	return false, nil
 }
 
 func (s *Shadow) svCheck(sv int64) error {
@@ -81,30 +93,30 @@ func (s *Shadow) svCheck(sv int64) error {
 	// Versions diverged, check backups in pending queue for
 	log.Println("sessionclock: SV mismatch, restoring backup")
 	for i := range s.pending {
-		if s.pending[i].Clock.SV == sv {
+		if s.pending[i].SV == sv {
 			s.SV = sv
 			s.res.Value = s.pending[i].Backup
 			s.pending = []Edit{}
 			return nil
 		}
 	}
-	return ErrSVDiverged{sv, s.SessionClock.SV}
+	return ErrSVDiverged{sv, s.SV}
 }
 
 func (shadow *Shadow) SyncIncoming(edit Edit, result *SyncResult, ctx Context) error {
 	// Make sure clocks are in sync or recoverable
 	log.Printf("shadow[%s]: sync incoming edit: `%v`\n", shadow.res.StringRef(), edit)
-	if err := shadow.svCheck(edit.Clock.SV); err != nil {
+	if err := shadow.svCheck(edit.SV); err != nil {
 		return err
 	}
 	pending := make([]Edit, 0, len(shadow.pending))
 	for _, instack := range shadow.pending {
-		if !edit.Clock.Ack(instack.Clock) {
+		if edit.SV < instack.SV {
 			pending = append(pending, instack)
 		}
 	}
 	shadow.pending = pending
-	if dupe, err := shadow.CheckCV(edit.Clock); dupe {
+	if dupe, err := shadow.cvCheck(edit.CV); dupe {
 		return nil
 	} else if err != nil {
 		log.Printf("err sync cv")
@@ -119,7 +131,7 @@ func (shadow *Shadow) SyncIncoming(edit Edit, result *SyncResult, ctx Context) e
 		return err
 	}
 	shadow.res.Value = newres
-	shadow.IncCv()
+	shadow.CV++
 	// send patches to store
 	for i := range patches {
 		log.Printf("found patch: %s", patches[i])
@@ -135,7 +147,7 @@ func (s *Shadow) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]interface{}{
 		"res":     s.res,
 		"pending": s.pending,
-		"clock":   s.SessionClock,
+		"clock":   s.Clock,
 	})
 }
 
@@ -155,17 +167,17 @@ func (shadow *Shadow) UnmarshalJSON(from []byte) error {
 			RawValue json.RawMessage `json:"val"`
 		} `json:"res"`
 		Pending []struct {
-			Clock     SessionClock    `json:"clock"`
+			Clock     `json:"clock"`
 			RawDelta  json.RawMessage `json:"delta"`
 			RawBackup json.RawMessage `json:"backup"`
 		} `json:"pending"`
-		SessionClock `json:"clock"`
+		Clock `json:"clock"`
 	}{}
 	if err := json.Unmarshal(from, &tmp); err != nil {
 		return err
 	}
 	shadow.res = Resource{Kind: tmp.Res.Kind, ID: tmp.Res.ID}
-	shadow.SessionClock = tmp.SessionClock
+	shadow.Clock = tmp.Clock
 	shadow.pending = make([]Edit, len(tmp.Pending))
 	switch tmp.Res.Kind {
 	case "note":
