@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hiro/hync/comm"
+	"bitbucket.org/sushimako/hync/comm"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"

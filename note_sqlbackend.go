@@ -8,7 +8,7 @@ import (
 
 	"database/sql"
 
-	"github.com/hiro/hync/comm"
+	"bitbucket.org/sushimako/hync/comm"
 	DMP "github.com/sergi/go-diff/diffmatchpatch"
 )
 

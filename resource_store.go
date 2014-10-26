@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/hiro/hync/comm"
+	"bitbucket.org/sushimako/hync/comm"
 )
 
 var (

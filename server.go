@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/hiro/hync/comm"
+	"bitbucket.org/sushimako/hync/comm"
 )
 
 type Server struct {
