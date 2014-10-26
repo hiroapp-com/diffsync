@@ -147,6 +147,7 @@ func (tok *TokenConsumer) createSession(token Token, ctx Context) (*Session, err
 			if _, err = tok.db.Exec("UPDATE users SET tier = 0 WHERE uid = $1", token.UID); err != nil {
 				return nil, err
 			}
+			ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "profile", ID: u.UID}, ctx: ctx})
 		}
 		// add note to folio, if any in token
 		if err = tok.addNoteRef(token.UID, token.NID, ctx); err != nil {

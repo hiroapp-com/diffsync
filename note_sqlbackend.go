@@ -183,6 +183,10 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		if err != nil {
 			return err
 		}
+		_, err = backend.db.Exec("DELETE FROM tokens WHERE kind = 'share' AND nid = $1 AND uid = $2", nid, patch.Path)
+		if err != nil {
+			return err
+		}
 		ctx.Router.Handle(Event{UID: patch.Path, Name: "res-remove", Res: Resource{Kind: "note", ID: nid}, ctx: ctx})
 		result.Tainted(Resource{Kind: "folio", ID: patch.Path})
 		result.Tainted(Resource{Kind: "note", ID: nid})
