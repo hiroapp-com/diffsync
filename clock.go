@@ -15,27 +15,31 @@ type Versioned interface {
 	Sv() int64
 }
 
-type Rollbacker interface {
-	Rollback()
+type ErrCVDiverged struct {
+	client int64
+	server int64
 }
 
-type VersionsDivergedError struct {
-	server Versioned
-	client Versioned
+type ErrSVDiverged struct {
+	client int64
+	server int64
 }
 
-func (c VersionsDivergedError) Error() string {
-	return fmt.Sprintf("client: %v server: %v", c.client, c.server)
+func (e ErrCVDiverged) Error() string {
+	return fmt.Sprintf("CV mismatch: %d (client) != %d (server)", e.client, e.server)
+}
+
+func (e ErrSVDiverged) Error() string {
+	return fmt.Sprintf("SV mismatch: %d (client) != %d (server)", e.client, e.server)
 }
 
 type SessionClock struct {
 	CV int64 `json:"cv"`
 	SV int64 `json:"sv"`
-	BV int64 `json:"bv,omitempty"`
 }
 
 func (clock SessionClock) Clone() SessionClock {
-	return SessionClock{clock.CV, clock.SV, clock.BV}
+	return SessionClock{clock.CV, clock.SV}
 }
 
 func (clock SessionClock) Cv() int64 {
@@ -51,22 +55,6 @@ func (clock *SessionClock) IncSv() {
 	clock.SV++
 }
 
-func (clock *SessionClock) Checkpoint() {
-	clock.BV = clock.SV
-}
-
-func (clock *SessionClock) SyncSvWith(other Versioned, rb Rollbacker) error {
-	if clock.SV != other.Sv() {
-		if clock.BV != other.Sv() {
-			return VersionsDivergedError{*clock, other}
-		}
-		log.Println("sessionclock: SV mismatch, rolling back backup")
-		clock.SV = clock.BV
-		rb.Rollback()
-	}
-	return nil
-}
-
 func (clock SessionClock) Ack(pending Versioned) bool {
 	// Return whether clock acks other
 	return clock.SV >= pending.Sv()
@@ -78,7 +66,7 @@ func (clock SessionClock) CheckCV(other Versioned) (is_dupe bool, err error) {
 	case clock.CV > other.Cv():
 		return true, nil
 	case clock.CV < other.Cv():
-		return false, VersionsDivergedError{clock, other}
+		return false, ErrCVDiverged{other.Cv(), clock.CV}
 	}
 	return false, nil
 }

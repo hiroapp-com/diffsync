@@ -12,14 +12,14 @@ type SyncResult struct {
 
 type Shadow struct {
 	res     Resource
-	backup  ResourceValue
 	pending []Edit
 	SessionClock
 }
 
 type Edit struct {
-	Clock SessionClock `json:"clock"`
-	Delta Delta        `json:"delta"`
+	Clock  SessionClock  `json:"clock"`
+	Delta  Delta         `json:"delta"`
+	Backup ResourceValue `json:"backup"`
 }
 
 func (e Edit) String() string {
@@ -29,7 +29,6 @@ func (e Edit) String() string {
 func NewShadow(res Resource) *Shadow {
 	return &Shadow{
 		res:          res,
-		backup:       res.Value.Clone(),
 		pending:      []Edit{},
 		SessionClock: SessionClock{},
 	}
@@ -39,11 +38,6 @@ func NewSyncResult() *SyncResult {
 	return &SyncResult{
 		tainted: []Resource{},
 	}
-}
-
-func (shadow *Shadow) Rollback() {
-	shadow.res.Value = shadow.backup
-	shadow.pending = []Edit{}
 }
 
 func (shadow *Shadow) AddEdit(edit Edit) {
@@ -68,20 +62,39 @@ func (shadow *Shadow) UpdatePending(forceEmptyDelta bool, store *Store) bool {
 	delta := shadow.res.Value.GetDelta(res.Value)
 	log.Printf("shadow[%s]: found delta: `%s`\n", res.StringRef(), delta)
 	if delta.HasChanges() {
-		shadow.AddEdit(Edit{shadow.SessionClock.Clone(), delta})
+		shadow.AddEdit(Edit{shadow.SessionClock.Clone(), delta, shadow.res.Value})
 		shadow.res = res
 		shadow.IncSv()
 		return true
 	} else if forceEmptyDelta {
-		shadow.AddEdit(Edit{shadow.SessionClock.Clone(), delta})
+		shadow.AddEdit(Edit{shadow.SessionClock.Clone(), delta, shadow.res.Value})
 		return true
 	}
 	return false
 }
+
+func (s *Shadow) svCheck(sv int64) error {
+	if s.SV == sv {
+		// everything kosher, move on
+		return nil
+	}
+	// Versions diverged, check backups in pending queue for
+	log.Println("sessionclock: SV mismatch, restoring backup")
+	for i := range s.pending {
+		if s.pending[i].Clock.SV == sv {
+			s.SV = sv
+			s.res.Value = s.pending[i].Backup
+			s.pending = []Edit{}
+			return nil
+		}
+	}
+	return ErrSVDiverged{sv, s.SessionClock.SV}
+}
+
 func (shadow *Shadow) SyncIncoming(edit Edit, result *SyncResult, ctx Context) error {
 	// Make sure clocks are in sync or recoverable
 	log.Printf("shadow[%s]: sync incoming edit: `%v`\n", shadow.res.StringRef(), edit)
-	if err := shadow.SessionClock.SyncSvWith(edit.Clock, shadow); err != nil {
+	if err := shadow.svCheck(edit.Clock.SV); err != nil {
 		return err
 	}
 	pending := make([]Edit, 0, len(shadow.pending))
@@ -106,8 +119,6 @@ func (shadow *Shadow) SyncIncoming(edit Edit, result *SyncResult, ctx Context) e
 		return err
 	}
 	shadow.res.Value = newres
-	shadow.backup = newres
-	shadow.Checkpoint()
 	shadow.IncCv()
 	// send patches to store
 	for i := range patches {
@@ -123,7 +134,6 @@ func (shadow *Shadow) SyncIncoming(edit Edit, result *SyncResult, ctx Context) e
 func (s *Shadow) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]interface{}{
 		"res":     s.res,
-		"backup":  s.backup,
 		"pending": s.pending,
 		"clock":   s.SessionClock,
 	})
@@ -144,10 +154,10 @@ func (shadow *Shadow) UnmarshalJSON(from []byte) error {
 			ID       string          `json:"id"`
 			RawValue json.RawMessage `json:"val"`
 		} `json:"res"`
-		Backup  json.RawMessage `json:"backup"`
 		Pending []struct {
-			Clock    SessionClock    `json:"clock"`
-			RawDelta json.RawMessage `json:"delta"`
+			Clock     SessionClock    `json:"clock"`
+			RawDelta  json.RawMessage `json:"delta"`
+			RawBackup json.RawMessage `json:"backup"`
 		} `json:"pending"`
 		SessionClock `json:"clock"`
 	}{}
@@ -160,57 +170,54 @@ func (shadow *Shadow) UnmarshalJSON(from []byte) error {
 	switch tmp.Res.Kind {
 	case "note":
 		note := NewNote("")
-		backup := NewNote("")
 		if err := json.Unmarshal(tmp.Res.RawValue, &note); err != nil {
 			return err
 		}
-		if err := json.Unmarshal(tmp.Backup, &backup); err != nil {
-			return err
-		}
 		shadow.res.Value = note
-		shadow.backup = backup
 		for i := range tmp.Pending {
 			delta := NoteDelta{}
+			backup := NewNote("")
 			if err := json.Unmarshal(tmp.Pending[i].RawDelta, &delta); err != nil {
 				return err
 			}
-			shadow.pending[i] = Edit{Clock: tmp.Pending[i].Clock, Delta: delta}
+			if err := json.Unmarshal(tmp.Pending[i].RawBackup, &backup); err != nil {
+				return err
+			}
+			shadow.pending[i] = Edit{Clock: tmp.Pending[i].Clock, Delta: delta, Backup: backup}
 		}
 	case "folio":
 		folio := Folio{}
-		backup := Folio{}
 		if err := json.Unmarshal(tmp.Res.RawValue, &folio); err != nil {
 			return err
 		}
-		if err := json.Unmarshal(tmp.Backup, &backup); err != nil {
-			return err
-		}
 		shadow.res.Value = folio
-		shadow.backup = backup
 		for i := range tmp.Pending {
 			delta := FolioDelta{}
+			backup := Folio{}
 			if err := json.Unmarshal(tmp.Pending[i].RawDelta, &delta); err != nil {
 				return err
 			}
-			shadow.pending[i] = Edit{Clock: tmp.Pending[i].Clock, Delta: delta}
+			if err := json.Unmarshal(tmp.Pending[i].RawBackup, &backup); err != nil {
+				return err
+			}
+			shadow.pending[i] = Edit{Clock: tmp.Pending[i].Clock, Delta: delta, Backup: backup}
 		}
 	case "profile":
 		profile := NewProfile()
-		backup := NewProfile()
 		if err := json.Unmarshal(tmp.Res.RawValue, &profile); err != nil {
 			return err
 		}
-		if err := json.Unmarshal(tmp.Backup, &backup); err != nil {
-			return err
-		}
 		shadow.res.Value = profile
-		shadow.backup = backup
 		for i := range tmp.Pending {
 			delta := ProfileDelta{}
+			backup := NewProfile()
 			if err := json.Unmarshal(tmp.Pending[i].RawDelta, &delta); err != nil {
 				return err
 			}
-			shadow.pending[i] = Edit{Clock: tmp.Pending[i].Clock, Delta: delta}
+			if err := json.Unmarshal(tmp.Pending[i].RawBackup, &backup); err != nil {
+				return err
+			}
+			shadow.pending[i] = Edit{Clock: tmp.Pending[i].Clock, Delta: delta, Backup: backup}
 		}
 	}
 	return nil

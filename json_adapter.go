@@ -38,7 +38,7 @@ func (a jsonAdapter) MsgToEvent(from []byte) (Event, error) {
 			if err != nil {
 				return Event{}, err
 			}
-			ev.Changes[i] = Edit{c.Clock, d}
+			ev.Changes[i] = Edit{Clock: c.Clock, Delta: d}
 		}
 	}
 	return ev, nil
