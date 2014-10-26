@@ -184,15 +184,18 @@ func (tok *TokenConsumer) createSession(token Token, ctx Context) (*Session, err
 
 	// merge old session's data
 	if ctx.sid != "" {
-		oldUID, err := tok.uidFromSID(ctx.sid, true)
+		oldUID, tier, err := tok.uidFromSID(ctx.sid)
 		if err != nil {
 			return nil, err
 		}
-		if err = tok.assimilateUser(oldUID, uid, ctx); err != nil {
-			return nil, err
+		// only merge if old user wasn't re-used on signup and if old user is anon
+		if oldUID != uid && tier == 0 {
+			if err = tok.assimilateUser(oldUID, uid, ctx); err != nil {
+				return nil, err
+			}
+			ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "folio", ID: uid}, ctx: ctx})
+			ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "profile", ID: uid}, ctx: ctx})
 		}
-		ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "folio", ID: uid}, ctx: ctx})
-		ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "profile", ID: uid}, ctx: ctx})
 	}
 
 	// re-load profile
@@ -273,16 +276,13 @@ func (tok *TokenConsumer) getToken(plain string) (Token, error) {
 	return t, nil
 }
 
-func (tok *TokenConsumer) uidFromSID(sid string, onlyAnon bool) (uid string, err error) {
-	if onlyAnon {
-		err = tok.db.QueryRow("SELECT sessions.uid FROM sessions LEFT JOIN users ON users.uid = sessions.uid WHERE sid = $1 AND users.tier = 0", sid).Scan(&uid)
-	} else {
-		err = tok.db.QueryRow("SELECT sessions.uid FROM sessions WHERE sid = $1", sid).Scan(&uid)
-	}
+func (tok *TokenConsumer) uidFromSID(sid string) (uid string, tier int, err error) {
+	err = tok.db.QueryRow("SELECT sessions.uid, users.tier FROM sessions LEFT JOIN users ON users.uid = sessions.uid WHERE sid = $1", sid).Scan(&uid, &tier)
 	if err == sql.ErrNoRows {
 		// return no error but empty uid if no result
 		err = nil
 		uid = ""
+		tier = 0
 	}
 	return
 }
