@@ -34,14 +34,6 @@ func (err ResponseTimeoutErr) Error() string {
 	return fmt.Sprintf("response to sessions timed out. sid: `%s`", err.sid)
 }
 
-type RouteHandler struct {
-	hub *SessionHub
-}
-
-func (handler RouteHandler) Handle(event Event) error {
-	return handler.hub.Route(event)
-}
-
 func NewSessionHub(backend SessionBackend) *SessionHub {
 	return &SessionHub{
 		inbox:       make(chan Event),
@@ -55,7 +47,7 @@ func NewSessionHub(backend SessionBackend) *SessionHub {
 	}
 }
 
-func (hub *SessionHub) Route(event Event) error {
+func (hub *SessionHub) Handle(event Event) error {
 	if event.SID != "" {
 		select {
 		case hub.inbox <- event:
@@ -73,7 +65,7 @@ func (hub *SessionHub) Route(event Event) error {
 		for _, sid := range ss {
 			event.SID = sid
 			event.UID = ""
-			if err = hub.Route(event); err != nil {
+			if err = hub.Handle(event); err != nil {
 				return err
 			}
 		}
@@ -88,7 +80,7 @@ func (hub *SessionHub) Route(event Event) error {
 		for uid, res := range subs {
 			event.UID = uid
 			event.Res = res
-			if err = hub.Route(event); err != nil {
+			if err = hub.Handle(event); err != nil {
 				return err
 			}
 		}
@@ -103,7 +95,7 @@ func (hub *SessionHub) Snapshot(sid string, ctx Context) (*Session, error) {
 		resp <- event
 		return nil
 	}}
-	err := hub.Route(Event{Name: "snapshot", SID: sid, ctx: ctx})
+	err := hub.Handle(Event{Name: "snapshot", SID: sid, ctx: ctx})
 	if err != nil {
 		return nil, err
 	}
