@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/rand"
 	"sync"
 	"time"
 )
@@ -13,8 +12,6 @@ type SessionHub struct {
 	inbox       chan Event
 	runner_done chan string
 	active      map[string]chan Event
-	cache       map[string]*Session
-	cacheIndex  []string
 	backend     SessionBackend
 	stopch      chan struct{}
 	wg          sync.WaitGroup
@@ -39,8 +36,6 @@ func NewSessionHub(backend SessionBackend) *SessionHub {
 		inbox:       make(chan Event),
 		runner_done: make(chan string, 64),
 		active:      map[string]chan Event{},
-		cache:       map[string]*Session{},
-		cacheIndex:  make([]string, 0, 1024),
 		backend:     backend,
 		stopch:      make(chan struct{}),
 		wg:          sync.WaitGroup{},
@@ -122,7 +117,7 @@ func (hub *SessionHub) Run() {
 		select {
 		case sid := <-hub.runner_done:
 			log.Printf("sessionhub: sess-runner signaled shutdown %s\n", sid)
-			// make sure channel is closed and remove chan from active-cache
+			// close channel and remove from active runners
 			hub.cleanup_runner(sid)
 		case event, ok := <-hub.inbox:
 			if !ok {
@@ -148,28 +143,18 @@ func (hub *SessionHub) Stop() {
 func (hub *SessionHub) toSession(sid string, event Event) error {
 	// if session has an active runner, get its inbox
 	inbox, ok := hub.active[sid]
-	if ok {
-		// found active session-runner
-		inbox <- event
-		return nil
-	}
-	// no active sessionrunner available, see
-	// if we have the session still in cache
-	session, ok := hub.cache[sid]
 	if !ok {
-		// cache miss, load from backend and save to cache
-		var err error
-		session, err = hub.backend.Get(sid)
+		// no active runner found
+		// fetch session from sessionstore
+		inbox = make(chan Event, 32)
+		session, err := hub.backend.Get(sid)
 		if err != nil {
 			return err
 		}
-		hub.addCache(session)
+		// spin up runner for session
+		go checkInbox(inbox, session, hub)
+		hub.active[sid] = inbox
 	}
-	// spin up runner for cached session
-	inbox = make(chan Event, 32)
-	go checkInbox(inbox, session, hub)
-	hub.active[sid] = inbox
-	log.Println("sessionhub: route event to session", event)
 	inbox <- event
 	return nil
 }
@@ -212,10 +197,8 @@ CheckInbox:
 			break CheckInbox
 		case <-idleTimeout:
 			// idle for too long, shut down
-			// session will *not* be evicted from cache
 			log.Printf("session[%s]: no action for 5 minutes; stopping runner", session.sid[:6])
 			hub.runner_done <- session.sid
-			break CheckInbox
 		case <-saveTicker:
 			// persist sessiondata periodically
 			hub.backend.Save(session)
@@ -223,21 +206,6 @@ CheckInbox:
 	}
 	// persist session before shutting down runner
 	hub.backend.Save(session)
-}
-
-func (hub *SessionHub) addCache(session *Session) {
-	if len(hub.cacheIndex) < 1024 {
-		hub.cacheIndex = append(hub.cacheIndex, session.sid)
-	} else {
-		idx := rand.Int63n(int64(len(hub.cacheIndex)))
-		// Int63n(n) chooses from [0,n), so we can use it directly
-		// in the slice-index without running into oboe
-		evict := hub.cacheIndex[idx]
-		hub.cache[evict] = nil
-		// take the spot
-		hub.cacheIndex[idx] = session.sid
-	}
-	hub.cache[session.sid] = session
 }
 
 func (hub *SessionHub) logEvent(event Event) {
@@ -249,7 +217,6 @@ func (hub *SessionHub) logEvent(event Event) {
 
 func (hub *SessionHub) cleanup_runner(sid string) {
 	if inbox, ok := hub.active[sid]; ok {
-		log.Println("sessionhub: cleaning up runner for sid", sid)
 		delete(hub.active, sid)
 		close(inbox)
 	}
