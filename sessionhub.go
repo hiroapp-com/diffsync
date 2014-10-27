@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -15,6 +16,8 @@ type SessionHub struct {
 	cache       map[string]*Session
 	cacheIndex  []string
 	backend     SessionBackend
+	stopch      chan struct{}
+	wg          sync.WaitGroup
 }
 
 type InvalidEventError struct{}
@@ -47,6 +50,8 @@ func NewSessionHub(backend SessionBackend) *SessionHub {
 		cache:       map[string]*Session{},
 		cacheIndex:  make([]string, 0, 1024),
 		backend:     backend,
+		stopch:      make(chan struct{}),
+		wg:          sync.WaitGroup{},
 	}
 }
 
@@ -119,13 +124,8 @@ func (hub *SessionHub) Snapshot(sid string, ctx Context) (*Session, error) {
 
 func (hub *SessionHub) Run() {
 	// spawn the hubrunner
-	defer func() {
-		for sid := range hub.active {
-			log.Printf("sessionhub: shutting down runner for %s \n", sid)
-			hub.cleanup_runner(sid)
-		}
-	}()
 	log.Println("sessionhub: entering main loop")
+	defer close(hub.stopch)
 	for {
 		select {
 		case sid := <-hub.runner_done:
@@ -144,12 +144,13 @@ func (hub *SessionHub) Run() {
 }
 
 func (hub *SessionHub) Stop() {
+	log.Println("sessionhub: stop requested")
+	// first shut hub inbox
 	tmp := hub.inbox
 	hub.inbox = nil
 	close(tmp)
-	// TODO we should have a shutdown-signaller channel around
-	// which will be shared to all shut-downable resources
-	// so one close can kill all processes
+	hub.wg.Wait()
+	log.Println("sessionhub: stopped.")
 }
 
 func (hub *SessionHub) toSession(sid string, event Event) error {
@@ -185,13 +186,19 @@ func checkInbox(inbox <-chan Event, session *Session, hub *SessionHub) {
 	if session == nil {
 		panic("NILSESSION")
 	}
-	defer func(sid, uid string, done chan string) {
-		if e := recover(); e != nil {
-			(Context{uid: uid}).LogCritical(fmt.Errorf("runtime panic: %v", e))
-		}
+	if session.sid == "" {
+		log.Println(session)
+		panic("EMPTY SID")
+	}
+	hub.wg.Add(1)
+	defer func(sid, uid string) {
+		//if e := recover(); e != nil {
+		//	(Context{uid: uid}).LogCritical(fmt.Errorf("runtime panic: %v", e))
+		//}
 		//signal shuwdown of runner to hub
-		done <- sid
-	}(session.sid, session.uid, hub.runner_done)
+		hub.wg.Done()
+		log.Printf("session[%s]: runner stopped.", sid[:6])
+	}(session.sid, session.uid)
 
 	log.Printf("(sessionhub starting runner for %s)", session.sid)
 	saveTicker := time.Tick(1 * time.Minute)
@@ -208,10 +215,14 @@ CheckInbox:
 			}
 			session.Handle(event)
 			idleTimeout = time.After(5 * time.Minute)
+		case <-hub.stopch:
+			log.Printf("session[%s]: stop requested", session.sid[:6])
+			break CheckInbox
 		case <-idleTimeout:
 			// idle for too long, shut down
 			// session will *not* be evicted from cache
 			log.Printf("session[%s]: no action for 5 minutes; stopping runner", session.sid[:6])
+			hub.runner_done <- session.sid
 			break CheckInbox
 		case <-saveTicker:
 			// persist sessiondata periodically
