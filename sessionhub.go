@@ -1,6 +1,7 @@
 package diffsync
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -16,14 +17,7 @@ type SessionHub struct {
 	backend     SessionBackend
 }
 
-type TimeoutError struct {
-	Msg string
-}
 type InvalidEventError struct{}
-
-func (err TimeoutError) Error() string {
-	return fmt.Sprintf("timeout: %s", err.Msg)
-}
 
 func (err InvalidEventError) Error() string {
 	return "invalid event"
@@ -56,19 +50,14 @@ func NewSessionHub(backend SessionBackend) *SessionHub {
 	}
 }
 
-func feedInbox(ch chan<- Event, e Event) error {
-	select {
-	case ch <- e:
-		return nil
-	case <-time.After(5 * time.Second):
-		return TimeoutError{"sessionhub inbox not responding whithin time"}
-	}
-}
-
 func (hub *SessionHub) Route(event Event) error {
 	if event.SID != "" {
-		// send directly to session
-		return feedInbox(hub.inbox, event)
+		select {
+		case hub.inbox <- event:
+			return nil
+		default:
+			return errors.New("sessionhub dead or not responding")
+		}
 	}
 	if event.UID != "" {
 		// forward to user's sessions
