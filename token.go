@@ -327,6 +327,11 @@ func (tok *TokenConsumer) assimilateUser(uidMan, uidBorg string, ctx Context) er
 		txn.Rollback()
 		return err
 	}
+	// copy name
+	if _, err = txn.Exec("UPDATE users SET name = (select name from users WHERE uid = $1 limit 1) WHERE uid = $2 AND name = ''", uidMan, uidBorg); err != nil {
+		txn.Rollback()
+		return err
+	}
 	// mark all other users with his email as disabled (tier -2)
 	if _, err = txn.Exec("UPDATE users SET tier = -2 WHERE uid = $1", uidMan); err != nil {
 		txn.Rollback()
@@ -363,7 +368,6 @@ func (tok *TokenConsumer) claimIDAndSignup(id string, user User, ctx Context) er
 		txn.Rollback()
 		return err
 	}
-	// http://localhost:5000/#32c39993ee6746edb0883d88386fba9c
 	nids := [][2]string{}
 	for rs.Next() {
 		var uid, nid string
@@ -374,22 +378,22 @@ func (tok *TokenConsumer) claimIDAndSignup(id string, user User, ctx Context) er
 		nids = append(nids, [2]string{uid, nid})
 	}
 	// now change those noterefs to the claiming UID
-	if _, err = txn.Exec(f("UPDATE noterefs SET uid = $1 WHERE uid IN (select uid from users WHERE uid <> $1 and $FIELD$ = $2)"), user.UID, v); err != nil {
+	if _, err = txn.Exec(f("UPDATE noterefs SET uid = $1 WHERE uid IN (select uid from users WHERE uid <> cast($1 as varchar) and $FIELD$ = $2)"), user.UID, v); err != nil {
 		txn.Rollback()
 		return err
 	}
 	// also claim all his contacts...
-	if _, err = txn.Exec(f("UPDATE contacts SET uid = $1 WHERE uid IN (select uid from users WHERE uid <> $1 and $FIELD$ = $2)"), user.UID, v); err != nil {
+	if _, err = txn.Exec(f("UPDATE contacts SET uid = $1 WHERE uid IN (select uid from users WHERE uid <> cast($1 as varchar) and $FIELD$ = $2)"), user.UID, v); err != nil {
 		txn.Rollback()
 		return err
 	}
 	// ...symmetrically
-	if _, err = txn.Exec(f("UPDATE contacts SET contact_uid = $1 WHERE contact_uid IN (select uid from users WHERE uid <> $1 and $FIELD$ = $2)"), user.UID, v); err != nil {
+	if _, err = txn.Exec(f("UPDATE contacts SET contact_uid = $1 WHERE contact_uid IN (select uid from users WHERE uid <> cast($1 as varchar) and $FIELD$ = $2)"), user.UID, v); err != nil {
 		txn.Rollback()
 		return err
 	}
 	// mark all other users with his email as disabled (tier -2)
-	if _, err = txn.Exec(f("UPDATE users SET tier = -2 WHERE uid IN (select uid from users WHERE uid <> $1 and $FIELD$ = $2)"), user.UID, v); err != nil {
+	if _, err = txn.Exec(f("UPDATE users SET tier = -2 WHERE uid IN (select uid from users WHERE uid <> cast($1 as varchar) and $FIELD$ = $2)"), user.UID, v); err != nil {
 		txn.Rollback()
 		return err
 	}
