@@ -152,6 +152,7 @@ func (hub *SessionHub) toSession(sid string, event Event) error {
 			return err
 		}
 		// spin up runner for session
+		hub.wg.Add(1)
 		go checkInbox(inbox, session, hub)
 		hub.active[sid] = inbox
 	}
@@ -160,6 +161,14 @@ func (hub *SessionHub) toSession(sid string, event Event) error {
 }
 
 func checkInbox(inbox <-chan Event, session *Session, hub *SessionHub) {
+	defer func(sid, uid string, h *SessionHub) {
+		//if e := recover(); e != nil {
+		//	(Context{uid: uid}).LogCritical(fmt.Errorf("runtime panic: %v", e))
+		//}
+		//signal shuwdown of runner to hub
+		h.wg.Done()
+		log.Printf("session[%s]: runner stopped.", sid[:6])
+	}(session.sid, session.uid, hub)
 	if session == nil {
 		panic("NILSESSION")
 	}
@@ -167,15 +176,6 @@ func checkInbox(inbox <-chan Event, session *Session, hub *SessionHub) {
 		log.Println(session)
 		panic("EMPTY SID")
 	}
-	hub.wg.Add(1)
-	defer func(sid, uid string) {
-		//if e := recover(); e != nil {
-		//	(Context{uid: uid}).LogCritical(fmt.Errorf("runtime panic: %v", e))
-		//}
-		//signal shuwdown of runner to hub
-		hub.wg.Done()
-		log.Printf("session[%s]: runner stopped.", sid[:6])
-	}(session.sid, session.uid)
 
 	log.Printf("(sessionhub starting runner for %s)", session.sid)
 	saveTicker := time.Tick(1 * time.Minute)
