@@ -1,7 +1,6 @@
 package diffsync
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -44,12 +43,8 @@ func NewSessionHub(backend SessionBackend) *SessionHub {
 
 func (hub *SessionHub) Handle(event Event) error {
 	if event.SID != "" {
-		select {
-		case hub.inbox <- event:
-			return nil
-		default:
-			return errors.New("sessionhub dead or not responding")
-		}
+		hub.inbox <- event
+		return nil
 	}
 	if event.UID != "" {
 		// forward to user's sessions
