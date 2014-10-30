@@ -76,7 +76,8 @@ CREATE TABLE "tokens" (
     email varchar(255) default '',
     phone varchar(64) default '',
     valid_from timestamptz default NOW(),
-    times_consumed smallint default 0
+    times_consumed smallint default 0,
+    last_consumed_at timestamptz
 );
 
 CREATE TABLE "contacts" (

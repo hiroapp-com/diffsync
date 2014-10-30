@@ -251,7 +251,7 @@ func (tok *TokenConsumer) GetUID(sid string) (string, error) {
 }
 
 func (tok *TokenConsumer) markConsumed(token Token) (err error) {
-	_, err = tok.db.Exec("UPDATE tokens SET times_consumed = times_consumed+1 WHERE token = $1", token.Key)
+	_, err = tok.db.Exec("UPDATE tokens SET times_consumed = times_consumed+1, last_consumed_at=now() WHERE token = $1", token.Key)
 	return
 }
 
