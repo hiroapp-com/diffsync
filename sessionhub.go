@@ -157,9 +157,9 @@ func (hub *SessionHub) toSession(sid string, event Event) error {
 
 func checkInbox(inbox <-chan Event, session *Session, hub *SessionHub) {
 	defer func(sid, uid string, h *SessionHub) {
-		//if e := recover(); e != nil {
-		//	(Context{uid: uid}).LogCritical(fmt.Errorf("runtime panic: %v", e))
-		//}
+		if e := recover(); e != nil {
+			(Context{uid: uid}).LogCritical(fmt.Errorf("runtime panic: %v", e))
+		}
 		//signal shuwdown of runner to hub
 		h.wg.Done()
 		log.Printf("session[%s]: runner stopped.", sid[:6])
