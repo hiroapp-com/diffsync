@@ -8,7 +8,7 @@ import (
 
 	"encoding/json"
 
-	DMP "github.com/sushimako/go-diff/diffmatchpatch"
+	DMP "github.com/sergi/go-diff/diffmatchpatch"
 )
 
 var (
