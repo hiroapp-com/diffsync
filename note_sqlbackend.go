@@ -9,7 +9,7 @@ import (
 	"database/sql"
 
 	"bitbucket.org/sushimako/hync/comm"
-	DMP "github.com/sergi/go-diff/diffmatchpatch"
+	DMP "github.com/sushimako/go-diff/diffmatchpatch"
 )
 
 var (
@@ -72,20 +72,13 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		// patch.Value contains text-patches
 		// patch.OldValue empty
 		p := patch.Value.([]DMP.Patch)
-		_, err := backend.patchText(nid, p, result)
+		err := backend.patchText(nid, p, result)
 		if err != nil {
 			return fmt.Errorf("notesqlbackend: note(%s) could not be patched. patch: `%v`, err: `%s`", nid, patch.Value, err)
 		}
 		if err = backend.pokeTimers(nid, true, ctx); err != nil {
 			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
-		//ds := []DMP.Diff{}
-		//for i := range applied {
-		//	if applied[i] {
-		//		// TODO: can we use a Patch's diffs as they are? what are the purpose of start{1,2}, length{1,2}?
-		//		ds = append(ds, p[i].Diffs()...)
-		//	}
-		//}
 
 		result.Tainted(Resource{Kind: "note", ID: nid})
 	case "title":
@@ -235,30 +228,69 @@ func (backend NoteSQLBackend) CreateEmpty(ctx Context) (string, error) {
 	return nid, nil
 }
 
-func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch, result *SyncResult) ([]bool, error) {
+func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch, result *SyncResult) error {
 	txn, err := backend.db.Begin()
 	if err != nil {
-		return []bool{}, err
+		return err
 	}
 	var original string
 	switch err := txn.QueryRow("SELECT txt FROM notes WHERE nid = $1", id).Scan(&original); {
 	case err == sql.ErrNoRows:
 		txn.Rollback()
-		return []bool{}, NoExistError{id}
+		return NoExistError{id}
 	case err != nil:
 		txn.Rollback()
-		return []bool{}, err
+		return err
 	}
 	patched, applied := dmp.PatchApply(patch, original)
 	if _, err := txn.Exec("UPDATE notes SET txt = $1 WHERE nid = $2", patched, id); err != nil {
 		txn.Rollback()
-		return []bool{}, err
+		return err
+	}
+
+	//update cursor positions
+	ds := []DMP.Diff{}
+	for i := range applied {
+		if applied[i] {
+			ds = append(ds, patch[i].Diffs()...)
+		}
+	}
+	pos, err := txn.Query("SELECT uid, cursor_pos FROM noterefs WHERE nid = $1", id)
+	if err != nil {
+		txn.Rollback()
+		return err
+	}
+	// due to a bug in lib/pq, we cannot execute statements while iterating over
+	// a query result (cf: https://github.com/lib/pq/issues/81#issuecomment-26297462)
+	// hence, we'll store the results in a map and perform our changes later in a seperate
+	// loop over the map
+	uidpos := map[string]int{}
+	for pos.Next() {
+		var uid string
+		var cpos int
+		if err := pos.Scan(&uid, &cpos); err != nil {
+			txn.Rollback()
+			return err
+		}
+		uidpos[uid] = cpos
+	}
+	pos.Close()
+	stmt, err := txn.Prepare("UPDATE noterefs SET cursor_pos = $3 WHERE nid = $1 AND uid = $2 AND cursor_pos = $4")
+	if err != nil {
+		txn.Rollback()
+		return err
+	}
+	for uid, cpos := range uidpos {
+		if _, err = stmt.Exec(id, uid, dmp.DiffXIndex(ds, cpos), cpos); err != nil {
+			txn.Rollback()
+			return err
+		}
 	}
 	txn.Commit()
 	if original != patched {
 		result.Tainted(Resource{Kind: "note", ID: id})
 	}
-	return applied, nil
+	return nil
 }
 
 func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx Context) (err error) {
