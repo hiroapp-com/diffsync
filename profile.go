@@ -214,6 +214,11 @@ func (uc *UserChange) UnmarshalJSON(from []byte) (err error) {
 		if err = json.Unmarshal(tmp.RawValue, &u); err == nil {
 			uc.Value = u
 		}
+	case "set-tier":
+		i := 0
+		if err = json.Unmarshal(tmp.RawValue, &i); err == nil {
+			uc.Value = i
+		}
 	default:
 		s := ""
 		if err = json.Unmarshal(tmp.RawValue, &s); err == nil {
