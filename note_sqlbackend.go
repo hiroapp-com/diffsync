@@ -71,22 +71,13 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		// patch.Path empty
 		// patch.Value contains text-patches
 		// patch.OldValue empty
-		p := patch.Value.([]DMP.Patch)
-		_, err := backend.patchText(nid, p, result)
+		err := backend.patchText(nid, patch.Value.([]DMP.Patch), result)
 		if err != nil {
 			return fmt.Errorf("notesqlbackend: note(%s) could not be patched. patch: `%v`, err: `%s`", nid, patch.Value, err)
 		}
 		if err = backend.pokeTimers(nid, true, ctx); err != nil {
 			log.Printf("notesqlbackend: note(%s) couldnot poke edit-timers for uid %s. err: %s", nid, ctx.uid, err)
 		}
-		//ds := []DMP.Diff{}
-		//for i := range applied {
-		//	if applied[i] {
-		//		// TODO: can we use a Patch's diffs as they are? what are the purpose of start{1,2}, length{1,2}?
-		//		ds = append(ds, p[i].Diffs()...)
-		//	}
-		//}
-
 		result.Tainted(Resource{Kind: "note", ID: nid})
 	case "title":
 		// patch.Path empty
@@ -235,30 +226,30 @@ func (backend NoteSQLBackend) CreateEmpty(ctx Context) (string, error) {
 	return nid, nil
 }
 
-func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch, result *SyncResult) ([]bool, error) {
+func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch, result *SyncResult) error {
 	txn, err := backend.db.Begin()
 	if err != nil {
-		return []bool{}, err
+		return err
 	}
 	var original string
 	switch err := txn.QueryRow("SELECT txt FROM notes WHERE nid = $1", id).Scan(&original); {
 	case err == sql.ErrNoRows:
 		txn.Rollback()
-		return []bool{}, NoExistError{id}
+		return NoExistError{id}
 	case err != nil:
 		txn.Rollback()
-		return []bool{}, err
+		return err
 	}
-	patched, applied := dmp.PatchApply(patch, original)
+	patched, _ := dmp.PatchApply(patch, original)
 	if _, err := txn.Exec("UPDATE notes SET txt = $1 WHERE nid = $2", patched, id); err != nil {
 		txn.Rollback()
-		return []bool{}, err
+		return err
 	}
 	txn.Commit()
 	if original != patched {
 		result.Tainted(Resource{Kind: "note", ID: id})
 	}
-	return applied, nil
+	return nil
 }
 
 func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx Context) (err error) {
