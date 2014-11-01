@@ -131,7 +131,7 @@ func (shadow *Shadow) SyncIncoming(edit Edit, result *SyncResult, ctx Context) e
 		return Remark{
 			Level: "error",
 			Slug:  "delta-inapplicable",
-			Data:  map[string]string{"detail": err.Error()},
+			Data:  map[string]string{"message": err.Error()},
 		}
 	}
 	shadow.res.Value = newres
