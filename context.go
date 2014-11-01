@@ -62,6 +62,11 @@ func personFromUser(u User) rollbar.Person {
 }
 
 func init() {
-	rollbar.Token = os.Getenv("ROLLBAR_TOKEN")
 	rollbar.Plattform = "hync"
+	rollbar.Token = os.Getenv("ROLLBAR_TOKEN")
+	env := os.Getenv("ROLLBAR_ENV")
+	if env != "" {
+		rollbar.Environment = env
+	}
+	rollbar.Message(rollbar.INFO, "hync started", rollbar.Person{})
 }
