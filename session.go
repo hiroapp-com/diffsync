@@ -165,6 +165,10 @@ func (sess *Session) handle_sync(event Event) {
 			// e.g. reasons why an edit failed
 			log.Println("ERRR sync:", err) //todo error handling! do we need 'changed' here?
 			event.ctx.LogError(err)
+			event.Remark = &Remark{Level: "err", Message: fmt.Sprintf("sync failed - %s", err)}
+			event.Changes = []Edit{}
+			sess.push_client(event)
+			return
 		}
 	}
 	for _, res := range result.tainted {
