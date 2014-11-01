@@ -34,7 +34,7 @@ func (store *SQLSessions) Get(sid string) (*Session, error) {
 
 func (store *SQLSessions) Save(session *Session) error {
 	// is an upsert, needs doc
-	log.Printf("saving session `%s`, %v", session.sid, *session)
+	log.Printf("sessionbackend: saving %s", session.sid)
 	res, err := store.db.Exec("UPDATE sessions SET uid = $1, data = cast($2 as text) WHERE sid = $3", session.uid, session, session.sid)
 	if err != nil {
 		return err
@@ -50,7 +50,7 @@ func (store *SQLSessions) Save(session *Session) error {
 }
 
 func (store *SQLSessions) Delete(sid string) error {
-	log.Printf("deleting session `%s`", sid)
+	log.Printf("sessionbackend: deleting `%s`", sid)
 	_, err := store.db.Exec("DELETE FROM sessions WHERE sid = $1", sid)
 	return err
 }
