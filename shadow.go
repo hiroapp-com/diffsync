@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 )
 
 type SyncResult struct {
@@ -73,22 +74,14 @@ func (shadow *Shadow) UpdatePending(forceEmptyDelta bool, store *Store) bool {
 	return false
 }
 
-func (s *Shadow) cvCheck(cv int64) (is_dupe bool, err error) {
-	switch {
-	case s.CV == cv:
-		return false, nil
-	case s.CV > cv:
-		return true, nil
-	case s.CV < cv:
-		return false, ErrCVDiverged{cv, s.CV}
-	}
-	return false, nil
+func (s *Shadow) cvCheck(cv int64) (dupe, ok bool) {
+	return (s.CV > cv), (s.CV >= cv)
 }
 
-func (s *Shadow) svCheck(sv int64) error {
+func (s *Shadow) svCheck(sv int64) bool {
 	if s.SV == sv {
 		// everything kosher, move on
-		return nil
+		return true
 	}
 	// Versions diverged, check backups in pending queue for
 	log.Println("sessionclock: SV mismatch, restoring backup")
@@ -97,17 +90,21 @@ func (s *Shadow) svCheck(sv int64) error {
 			s.SV = sv
 			s.res.Value = s.pending[i].Backup
 			s.pending = []Edit{}
-			return nil
+			return true
 		}
 	}
-	return ErrSVDiverged{sv, s.SV}
+	return false
 }
 
 func (shadow *Shadow) SyncIncoming(edit Edit, result *SyncResult, ctx Context) error {
 	// Make sure clocks are in sync or recoverable
 	log.Printf("shadow[%s]: sync incoming edit: `%v`\n", shadow.res.StringRef(), edit)
-	if err := shadow.svCheck(edit.SV); err != nil {
-		return err
+	if !shadow.svCheck(edit.SV) {
+		return Remark{
+			Level: "fatal",
+			Slug:  "sv-mismatch",
+			Data:  map[string]string{"client": strconv.Itoa(int(edit.SV)), "server": strconv.Itoa(int(shadow.SV))},
+		}
 	}
 	pending := make([]Edit, 0, len(shadow.pending))
 	for _, instack := range shadow.pending {
@@ -116,11 +113,14 @@ func (shadow *Shadow) SyncIncoming(edit Edit, result *SyncResult, ctx Context) e
 		}
 	}
 	shadow.pending = pending
-	if dupe, err := shadow.cvCheck(edit.CV); dupe {
+	if dupe, ok := shadow.cvCheck(edit.CV); dupe {
 		return nil
-	} else if err != nil {
-		log.Printf("err sync cv")
-		return err
+	} else if !ok {
+		return Remark{
+			Level: "fatal",
+			Slug:  "cv-mismatch",
+			Data:  map[string]string{"client": strconv.Itoa(int(edit.CV)), "server": strconv.Itoa(int(shadow.CV))},
+		}
 	}
 	if !edit.Delta.HasChanges() {
 		return nil
@@ -128,7 +128,11 @@ func (shadow *Shadow) SyncIncoming(edit Edit, result *SyncResult, ctx Context) e
 	log.Printf("received delta: %s", edit.Delta)
 	newres, patches, err := edit.Delta.Apply(shadow.res.Value)
 	if err != nil {
-		return err
+		return Remark{
+			Level: "error",
+			Slug:  "delta-inapplicable",
+			Data:  map[string]string{"detail": err.Error()},
+		}
 	}
 	shadow.res.Value = newres
 	shadow.CV++

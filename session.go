@@ -161,13 +161,12 @@ func (sess *Session) handle_sync(event Event) {
 	for _, edit := range event.Changes {
 		err := shadow.SyncIncoming(edit, result, event.ctx)
 		if err != nil {
-			// TODO: we could also put detailed error info into `result`
-			// e.g. reasons why an edit failed
-			log.Println("ERRR sync:", err) //todo error handling! do we need 'changed' here?
 			event.ctx.LogError(err)
-			event.Remark = &Remark{Level: "err", Message: fmt.Sprintf("sync failed - %s", err)}
-			event.Changes = []Edit{}
-			sess.push_client(event)
+			if r, ok := err.(Remark); ok {
+				event.Changes = []Edit{}
+				event.Remark = &r
+				sess.push_client(event)
+			}
 			return
 		}
 	}

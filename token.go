@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,8 +63,11 @@ func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
 		token, err := tok.getToken(event.Token)
 		if err != nil {
 			event.ctx.LogInfo("Consumation of token `%s` failed with error: %s", event.Token, err)
-			event.Remark = &Remark{Level: "error", Message: err.Error()}
-			log.Println(event)
+			if r, ok := err.(Remark); ok {
+				event.Remark = &r
+			} else {
+				event.Remark = &Remark{Level: "error", Slug: "system-error"}
+			}
 			event.ctx.Client.Handle(event)
 			return nil
 		}
@@ -87,7 +91,11 @@ func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
 		token, err := tok.getToken(event.Token)
 		if err != nil {
 			event.ctx.LogInfo("Consumation of token `%s` failed with error: %s", event.Token, err)
-			event.Remark = &Remark{Level: "error", Message: err.Error()}
+			if r, ok := err.(Remark); ok {
+				event.Remark = &r
+			} else {
+				event.Remark = &Remark{Level: "error", Slug: "system-error"}
+			}
 			event.ctx.Client.Handle(event)
 			return nil
 		}
@@ -268,19 +276,18 @@ func (tok *TokenConsumer) getToken(plain string) (Token, error) {
 	h := sha512.New()
 	io.WriteString(h, plain)
 	hashed := hex.EncodeToString(h.Sum(nil))
-	log.Printf("Looking for token (byte: `%v`) with hash %s", tok, hashed)
 	t := Token{}
 	err := tok.db.QueryRow("SELECT token, kind, uid, nid, email, phone, valid_from, times_consumed FROM tokens where token = $1", hashed).Scan(&t.Key, &t.Kind, &t.UID, &t.NID, &t.Email, &t.Phone, &t.ValidFrom, &t.TimesConsumed)
 	if err == sql.ErrNoRows {
-		return Token{}, fmt.Errorf("Token not found or invalid")
+		return Token{}, Remark{Level: "error", Slug: "token-noexist-or-invalid"}
 	} else if err != nil {
 		return Token{}, err
 	}
 	if t.Expired() {
-		return Token{}, fmt.Errorf("Token has expired")
+		return Token{}, Remark{Level: "error", Slug: "token-expired"}
 	}
 	if t.Exhausted() {
-		return Token{}, fmt.Errorf("Token can only be consumed %d times", t.TimesConsumed)
+		return Token{}, Remark{Level: "error", Slug: "token-exhausted", Data: map[string]string{"max-consumes": strconv.Itoa(int(t.TimesConsumed))}}
 	}
 	log.Printf("retrieved token from db: %v\n", t)
 	return t, nil

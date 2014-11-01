@@ -28,9 +28,13 @@ func (err EventTimeoutError) Error() string {
 }
 
 type Remark struct {
-	Level   string            `json:"lvl"`
-	Message string            `json:"msg"`
-	Data    map[string]string `json:"data,omitempty"`
+	Level string            `json:"lvl"`
+	Slug  string            `json:"slug"`
+	Data  map[string]string `json:"data,omitempty"`
+}
+
+func (r Remark) Error() string {
+	return fmt.Sprintf("%s: %s (%s)", r.Level, r.Slug, r.Data)
 }
 
 // Event defines the main datastructure used for communication between all components
