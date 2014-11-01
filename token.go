@@ -99,9 +99,6 @@ func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
 		event.ctx.sid = session.sid
 		event.ctx.uid = session.uid
 		event.SID = session.sid
-		if err = tok.markConsumed(token); err != nil {
-			return err
-		}
 	default:
 		uid, err := tok.GetUID(event.SID)
 		if err != nil {
@@ -239,8 +236,20 @@ func (tok *TokenConsumer) consumeToken(token Token, ctx Context) (*Session, erro
 		// even if provided session is dead for some reason
 		return nil, err
 	}
-	err = tok.addNoteRef(session.uid, token.NID, ctx)
-	if err != nil {
+	if token.NID != "" {
+		// check if consuming session already has token.NID note
+		for i := range session.shadows {
+			if session.shadows[i].res.SameRef(Resource{Kind: "note", ID: token.NID}) {
+				// already in consuming session's folio. don't re-add and dont
+				// consume token
+				return session, nil
+			}
+		}
+		if err = tok.addNoteRef(session.uid, token.NID, ctx); err != nil {
+			return nil, err
+		}
+	}
+	if err = tok.markConsumed(token); err != nil {
 		return nil, err
 	}
 	return session, nil
