@@ -129,7 +129,7 @@ func (shadow *Shadow) SyncIncoming(edit Edit, result *SyncResult, ctx Context) e
 	newres, patches, err := edit.Delta.Apply(shadow.res.Value)
 	if err != nil {
 		return Remark{
-			Level: "error",
+			Level: "fatal",
 			Slug:  "delta-inapplicable",
 			Data:  map[string]string{"message": err.Error()},
 		}
