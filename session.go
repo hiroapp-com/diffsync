@@ -154,6 +154,9 @@ func (sess *Session) handle_sync(event Event) {
 	shadow, ok := sess.getShadow(event.Res)
 	if !ok {
 		event.ctx.LogError(fmt.Errorf("shadow `%s` not found, cannot sync.", event.Res))
+		event.Changes = []Edit{}
+		event.Remark = &Remark{Level: "fatal", Slug: "shadow-missing"}
+		sess.push_client(event)
 		return
 
 	}
