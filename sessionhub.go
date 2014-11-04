@@ -13,6 +13,7 @@ type SessionHub struct {
 	active      map[string]chan Event
 	backend     SessionBackend
 	stopch      chan struct{}
+	shutdown    chan struct{}
 	wg          sync.WaitGroup
 }
 
@@ -37,6 +38,7 @@ func NewSessionHub(backend SessionBackend) *SessionHub {
 		active:      map[string]chan Event{},
 		backend:     backend,
 		stopch:      make(chan struct{}),
+		shutdown:    make(chan struct{}),
 		wg:          sync.WaitGroup{},
 	}
 }
@@ -114,13 +116,11 @@ func (hub *SessionHub) Run() {
 			log.Printf("sessionhub: sess-runner signaled shutdown %s\n", sid)
 			// close channel and remove from active runners
 			hub.cleanup_runner(sid)
-		case event, ok := <-hub.inbox:
-			if !ok {
-				//inbox closed, shutdown requested
-				return
-			}
+		case event := <-hub.inbox:
 			hub.logEvent(event)
 			hub.toSession(event.SID, event)
+		case <-hub.shutdown:
+			return
 		}
 	}
 }
@@ -128,9 +128,7 @@ func (hub *SessionHub) Run() {
 func (hub *SessionHub) Stop() {
 	log.Println("sessionhub: stop requested")
 	// first shut hub inbox
-	tmp := hub.inbox
-	hub.inbox = nil
-	close(tmp)
+	close(hub.shutdown)
 	hub.wg.Wait()
 	log.Println("sessionhub: stopped.")
 }
