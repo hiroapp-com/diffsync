@@ -277,6 +277,7 @@ func (sess *Session) flush(ctx Context) {
 		shadow, ok := sess.getShadow(res)
 		if !ok {
 			ctx.LogError(fmt.Errorf("shadow `%s` not found, cannot sync.", res))
+			sess.tickoffTainted(res.Ref())
 			continue
 
 		}
