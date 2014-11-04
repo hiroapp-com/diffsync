@@ -153,7 +153,7 @@ func (sess *Session) handle_sync(event Event) {
 	// update taglib in the end
 	shadow, ok := sess.getShadow(event.Res)
 	if !ok {
-		event.ctx.LogError(fmt.Errorf("shadow `%s` not found, cannot sync. available shadows: %s", event.Res, sess.shadows))
+		event.ctx.LogError(fmt.Errorf("shadow `%s` not found, cannot sync.", event.Res))
 		return
 
 	}
@@ -273,7 +273,7 @@ func (sess *Session) flush(ctx Context) {
 	for _, res := range sess.tainted {
 		shadow, ok := sess.getShadow(res)
 		if !ok {
-			ctx.LogError(fmt.Errorf("shadow `%s` not found, cannot sync. available shadows: %s", res, sess.shadows))
+			ctx.LogError(fmt.Errorf("shadow `%s` not found, cannot sync.", res))
 			continue
 
 		}

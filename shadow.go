@@ -58,8 +58,6 @@ func (shadow *Shadow) UpdatePending(forceEmptyDelta bool, store *Store) bool {
 	if err := store.Load(&res); err != nil {
 		log.Printf("shadow[%s]: error - could not load master-version for update. err: %s", res.StringRef(), err)
 	}
-	log.Printf("shadow[%s]: current mastertext: `%s`\n", res.StringRef(), res.Value)
-	log.Printf("shadow[%s]: current shadowtext: `%s`\n", shadow.res.StringRef(), shadow.res.Value)
 	delta := shadow.res.Value.GetDelta(res.Value)
 	log.Printf("shadow[%s]: found delta: `%s`\n", res.StringRef(), delta)
 	if delta.HasChanges() {
