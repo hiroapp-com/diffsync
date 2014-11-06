@@ -175,6 +175,7 @@ func checkInbox(inbox <-chan Event, session *Session, hub *SessionHub) {
 	// event loop runs is being executed for the
 	// whole lifetime of this runner.
 	idleTimeout := time.After(5 * time.Minute)
+	unsavedChanges := false
 CheckInbox:
 	for {
 		select {
@@ -185,6 +186,7 @@ CheckInbox:
 			}
 			session.Handle(event)
 			idleTimeout = time.After(5 * time.Minute)
+			unsavedChanges = true
 		case <-hub.stopch:
 			log.Printf("session[%s]: stop requested", session.sid[:6])
 			break CheckInbox
@@ -194,11 +196,16 @@ CheckInbox:
 			hub.runner_done <- session.sid
 		case <-saveTicker:
 			// persist sessiondata periodically
-			hub.backend.Save(session)
+			if unsavedChanges {
+				hub.backend.Save(session)
+				unsavedChanges = false
+			}
 		}
 	}
 	// persist session before shutting down runner
-	hub.backend.Save(session)
+	if unsavedChanges {
+		hub.backend.Save(session)
+	}
 }
 
 func (hub *SessionHub) logEvent(event Event) {
