@@ -2,6 +2,7 @@ package diffsync
 
 import (
 	"log"
+	"sync"
 
 	"database/sql"
 )
@@ -9,12 +10,15 @@ import (
 type SQLSessions struct {
 	db       *sql.DB
 	sessbuff chan *Session
+	uidCache map[string]string
+	uidLock  sync.Mutex
 }
 
 func NewSQLSessions(db *sql.DB) *SQLSessions {
 	return &SQLSessions{
 		db:       db,
 		sessbuff: make(chan *Session, 256),
+		uidCache: map[string]string{},
 	}
 }
 
@@ -63,11 +67,19 @@ func (store *SQLSessions) Release(sess *Session) {
 }
 
 func (store *SQLSessions) GetUID(sid string) (string, error) {
-	sess, err := store.Get(sid)
-	if err != nil {
-		return "", err
+	store.uidLock.Lock()
+	uid, ok := store.uidCache[sid]
+	defer store.uidLock.Unlock()
+	if !ok {
+		err := store.db.QueryRow("SELECT uid FROM sessions where sid = $1", sid).Scan(&uid)
+		if err == sql.ErrNoRows {
+			return "", SessionIDInvalidErr{sid}
+		} else if err != nil {
+			return "", err
+		}
+		store.uidCache[sid] = uid
 	}
-	return sess.uid, nil
+	return uid, nil
 }
 
 func (store *SQLSessions) allocateSession() *Session {
