@@ -109,6 +109,9 @@ func (change *FolioChange) UnmarshalJSON(from []byte) (err error) {
 	}
 	change.Op = tmp.Op
 	change.Path = tmp.Path
+	if tmp.RawValue == nil {
+		return nil
+	}
 	switch tmp.Op {
 	case "add-noteref", "swap-noteref":
 		nr := NoteRef{}

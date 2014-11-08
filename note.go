@@ -238,6 +238,9 @@ func (delta *NoteDeltaElement) UnmarshalJSON(from []byte) (err error) {
 	}
 	delta.Op = tmp.Op
 	delta.Path = tmp.Path
+	if tmp.RawValue == nil {
+		return nil
+	}
 	switch tmp.Op {
 	case "invite", "swap-user":
 		u := User{}
@@ -264,8 +267,6 @@ func (delta *NoteDeltaElement) UnmarshalJSON(from []byte) (err error) {
 		if err = json.Unmarshal(tmp.RawValue, &tv); err == nil {
 			delta.Value = tv
 		}
-	case "rem-peer":
-		// no value provided, donothing
 	default:
 		s := ""
 		if err = json.Unmarshal(tmp.RawValue, &s); err == nil {

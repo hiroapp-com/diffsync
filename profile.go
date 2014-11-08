@@ -208,6 +208,9 @@ func (uc *UserChange) UnmarshalJSON(from []byte) (err error) {
 	}
 	uc.Op = tmp.Op
 	uc.Path = tmp.Path
+	if tmp.RawValue == nil {
+		return nil
+	}
 	switch tmp.Op {
 	case "add-user", "swap-user":
 		u := User{}
