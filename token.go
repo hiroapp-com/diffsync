@@ -16,8 +16,9 @@ import (
 )
 
 var tokenLifeTimes = map[string]time.Duration{
-	"anon":      5 * time.Minute,
-	"login":     5 * 24 * time.Hour,
+	"anon": 5 * time.Minute,
+	//"login":     5 * 24 * time.Hour,
+	"login":     2 * 7 * 24 * time.Hour,    //2 weeks for now, so that sent-out login tokens to alpha users live a little longer
 	"verify":    2 * 7 * 24 * time.Hour,    //2 weeks
 	"share-url": 3 * 30.5 * 24 * time.Hour, //3 months
 	"share":     1 * 30.5 * 24 * time.Hour, //1 month
