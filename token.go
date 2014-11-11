@@ -44,6 +44,11 @@ func (t Token) Exhausted() bool {
 	if t.Kind == "share-url" {
 		return t.TimesConsumed >= 10
 	}
+	// NOTE this should be disable a few
+	// days after beta deployment
+	if t.Kind == "login" {
+		return false
+	}
 	return t.TimesConsumed > 0
 }
 
