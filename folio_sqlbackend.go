@@ -60,7 +60,7 @@ func (backend FolioSQLBackend) Patch(uid string, patch Patch, result *SyncResult
 		if !(status == "active" || status == "archived") {
 			return fmt.Errorf("folioSQLbackend: received invalid status: %s", status)
 		}
-		_, err := backend.db.Exec("UPDATE noterefs SET status = $1 WHERE nid = $2 and status = $3", status, patch.Path, patch.OldValue.(string))
+		_, err := backend.db.Exec("UPDATE noterefs SET status = $1 WHERE uid = $2 and nid = $3 and status = $4", status, uid, patch.Path, patch.OldValue.(string))
 		if err != nil {
 			return fmt.Errorf("folioSQLbackend: uid(%s) status change for nid(%s): could not persist new status: `%s`", uid, patch.Path, status)
 		}
