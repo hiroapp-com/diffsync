@@ -47,7 +47,7 @@ func (t Token) Exhausted() bool {
 	// NOTE this should be disable a few
 	// days after beta deployment
 	if t.Kind == "login" {
-		return false
+		return t.TimesConsumed > 4
 	}
 	return t.TimesConsumed > 0
 }
