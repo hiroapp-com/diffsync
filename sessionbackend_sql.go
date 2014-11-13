@@ -31,10 +31,8 @@ func (store *SQLSessions) Get(sid string) (*Session, error) {
 	status := ""
 	err := store.db.QueryRow("SELECT data, created_at, status FROM sessions where sid = $1", sid).Scan(session, &created, &status)
 	if err == sql.ErrNoRows {
-		//store.Release(session)
 		return nil, ErrInvalidSession(SessionNotfound)
 	} else if err != nil {
-		//store.Release(session)
 		return nil, err
 	}
 	if time.Now().Sub(created) > SessionLifetime {
@@ -63,19 +61,6 @@ func (store *SQLSessions) Save(session *Session) error {
 	return err
 }
 
-func (store *SQLSessions) Delete(sid string) error {
-	log.Printf("sessionbackend: deleting `%s`", sid)
-	_, err := store.db.Exec("DELETE FROM sessions WHERE sid = $1", sid)
-	return err
-}
-
-func (store *SQLSessions) Release(sess *Session) {
-	select {
-	case store.sessbuff <- sess:
-	default:
-	}
-}
-
 func (store *SQLSessions) GetUID(sid string) (string, error) {
 	store.uidLock.Lock()
 	uid, ok := store.uidCache[sid]
@@ -90,17 +75,6 @@ func (store *SQLSessions) GetUID(sid string) (string, error) {
 		store.uidCache[sid] = uid
 	}
 	return uid, nil
-}
-
-func (store *SQLSessions) allocateSession() *Session {
-	var sess *Session
-	select {
-	case sess = <-store.sessbuff:
-		log.Printf("Reusing session-pointer: %p", sess)
-	default:
-		sess = new(Session)
-	}
-	return sess
 }
 
 func (store *SQLSessions) SessionsOfUser(uid string) ([]string, error) {

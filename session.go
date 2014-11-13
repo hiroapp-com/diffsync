@@ -24,8 +24,6 @@ type SessionBackend interface {
 	Get(string) (*Session, error)
 	GetUID(string) (string, error)
 	Save(*Session) error
-	Delete(string) error
-	Release(*Session)
 	SessionsOfUser(string) ([]string, error)
 	GetSubscriptions(Resource) (map[string]Resource, error)
 }
