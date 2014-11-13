@@ -3,9 +3,12 @@ package diffsync
 import (
 	"log"
 	"sync"
+	"time"
 
 	"database/sql"
 )
+
+const SessionLifetime = 24 * time.Hour * 60
 
 type SQLSessions struct {
 	db       *sql.DB
@@ -24,22 +27,29 @@ func NewSQLSessions(db *sql.DB) *SQLSessions {
 
 func (store *SQLSessions) Get(sid string) (*Session, error) {
 	session := NewSession(sid, "")
-	err := store.db.QueryRow("SELECT data FROM sessions where sid = $1", sid).Scan(session)
+	created := time.Time{}
+	status := ""
+	err := store.db.QueryRow("SELECT data, created_at, status FROM sessions where sid = $1", sid).Scan(session, &created, &status)
 	if err == sql.ErrNoRows {
 		//store.Release(session)
-		return nil, SessionIDInvalidErr{sid}
+		return nil, ErrInvalidSession(SessionNotfound)
 	} else if err != nil {
 		//store.Release(session)
 		return nil, err
 	}
-
+	if time.Now().Sub(created) > SessionLifetime {
+		return nil, ErrInvalidSession(SessionExpired)
+	}
+	if status == "terminated" {
+		return nil, ErrInvalidSession(SessionTerminated)
+	}
 	return session, nil
 }
 
 func (store *SQLSessions) Save(session *Session) error {
 	// is an upsert, needs doc
 	log.Printf("sessionbackend: saving %s", session.sid)
-	res, err := store.db.Exec("UPDATE sessions SET uid = $1, data = cast($2 as text) WHERE sid = $3", session.uid, session, session.sid)
+	res, err := store.db.Exec("UPDATE sessions SET uid = $1, data = cast($2 as text), saved_at = now() WHERE sid = $3", session.uid, session, session.sid)
 	if err != nil {
 		return err
 	}
@@ -49,7 +59,7 @@ func (store *SQLSessions) Save(session *Session) error {
 		return nil
 	}
 	// nothing was updated, need to create session
-	_, err = store.db.Exec("INSERT INTO sessions (sid, uid, data) VALUES ($1, $2, $3)", session.sid, session.uid, session)
+	_, err = store.db.Exec("INSERT INTO sessions (sid, uid, data, saved_at) VALUES ($1, $2, $3, now())", session.sid, session.uid, session)
 	return err
 }
 
@@ -73,7 +83,7 @@ func (store *SQLSessions) GetUID(sid string) (string, error) {
 	if !ok {
 		err := store.db.QueryRow("SELECT uid FROM sessions where sid = $1", sid).Scan(&uid)
 		if err == sql.ErrNoRows {
-			return "", SessionIDInvalidErr{sid}
+			return "", ErrInvalidSession(SessionNotfound)
 		} else if err != nil {
 			return "", err
 		}
@@ -93,30 +103,9 @@ func (store *SQLSessions) allocateSession() *Session {
 	return sess
 }
 
-func (store *SQLSessions) subsByQuery(res Resource, qry string, args ...interface{}) (map[string]Resource, error) {
-	rows, err := store.db.Query(qry, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	subs := map[string]Resource{}
-	resetResID := (res.ID == "")
-	for rows.Next() {
-		var uid string
-		if err := rows.Scan(&uid); err != nil {
-			return nil, err
-		}
-		if resetResID {
-			res.ID = uid
-		}
-		subs[uid] = Resource{Kind: res.Kind, ID: res.ID}
-	}
-	return subs, nil
-}
-
 func (store *SQLSessions) SessionsOfUser(uid string) ([]string, error) {
 	sids := []string{}
-	rows, err := store.db.Query("SELECT sid FROM sessions WHERE uid = $1", uid)
+	rows, err := store.db.Query("SELECT sid FROM sessions WHERE uid = $1 AND status = 'active' AND created_at > $2", uid, time.Now().Add((-1)*SessionLifetime))
 	if err != nil {
 		return sids, err
 	}
@@ -152,4 +141,25 @@ func (store *SQLSessions) GetSubscriptions(res Resource) (map[string]Resource, e
 										                     			  WHERE nr.uid <> $1 AND nr2.uid is not null)`, res.ID)
 	}
 	return map[string]Resource{}, nil
+}
+
+func (store *SQLSessions) subsByQuery(res Resource, qry string, args ...interface{}) (map[string]Resource, error) {
+	rows, err := store.db.Query(qry, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	subs := map[string]Resource{}
+	resetResID := (res.ID == "")
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			return nil, err
+		}
+		if resetResID {
+			res.ID = uid
+		}
+		subs[uid] = Resource{Kind: res.Kind, ID: res.ID}
+	}
+	return subs, nil
 }

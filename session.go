@@ -15,9 +15,9 @@ var (
 )
 
 const (
-	SESSION_NOTEXIST = iota
-	SESSION_EXPIRED
-	SESSION_REVOKED
+	SessionNotfound = iota
+	SessionExpired
+	SessionTerminated
 )
 
 type SessionBackend interface {
@@ -36,9 +36,7 @@ type Auther interface {
 
 type ResourceRegistry map[string]map[string]bool
 
-type SessionIDInvalidErr struct {
-	sid string
-}
+type ErrInvalidSession int64
 
 type Tag struct {
 	Ref      string    `json:"ref"`
@@ -506,8 +504,34 @@ func (session *Session) UnmarshalJSON(from []byte) error {
 	return nil
 }
 
-func (err SessionIDInvalidErr) Error() string {
-	return fmt.Sprintf("invalid session-id: %s", err.sid)
+func (e ErrInvalidSession) Error() string {
+	switch e {
+	case SessionNotfound:
+		return "session not found"
+	case SessionTerminated:
+		return "session has been terminated"
+	case SessionExpired:
+		return "session has expired"
+	default:
+		// fail hard so this does not pass unnoticed
+		panic("unknown ErrInvalidSession error received")
+	}
+	return ""
+}
+
+func (e ErrInvalidSession) Slug() string {
+	switch e {
+	case SessionNotfound:
+		return "session-notfound"
+	case SessionTerminated:
+		return "session-terminated"
+	case SessionExpired:
+		return "session-expired"
+	default:
+		// fail hard so this does not pass unnoticed
+		panic("unknown ErrInvalidSession error received")
+	}
+	return ""
 }
 
 func generateSID() string {

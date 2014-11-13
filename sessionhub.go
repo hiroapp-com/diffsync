@@ -3,6 +3,7 @@ package diffsync
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -87,15 +88,15 @@ func (hub *SessionHub) Snapshot(sid string, ctx Context) (*Session, error) {
 		resp <- event
 		return nil
 	}}
-	err := hub.Handle(Event{Name: "snapshot", SID: sid, ctx: ctx})
-	if err != nil {
+	if err := hub.Handle(Event{Name: "snapshot", SID: sid, ctx: ctx}); err != nil {
 		return nil, err
 	}
 	select {
 	case event := <-resp:
 		//response!
-		if event.Session == nil {
-			return nil, SessionIDInvalidErr{sid}
+		if event.Remark != nil {
+			eid, _ := strconv.Atoi(event.Remark.Data["err-code"])
+			return nil, ErrInvalidSession(eid)
 		}
 		return event.Session, nil
 	case <-time.After(5 * time.Second):
@@ -118,7 +119,7 @@ func (hub *SessionHub) Run() {
 			hub.cleanup_runner(sid)
 		case event := <-hub.inbox:
 			hub.logEvent(event)
-			hub.toSession(event.SID, event)
+			log.Println(hub.toSession(event))
 		case <-hub.shutdown:
 			return
 		}
@@ -133,21 +134,39 @@ func (hub *SessionHub) Stop() {
 	log.Println("sessionhub: stopped.")
 }
 
-func (hub *SessionHub) toSession(sid string, event Event) error {
+func (hub *SessionHub) handleInvalidSession(err error, event Event) {
+	if e, ok := err.(ErrInvalidSession); ok {
+		// only notify client if it exists and is of same SID this event is addressed to
+		if event.ctx.sid == event.SID && event.ctx.Client != nil {
+			log.Println("clientpush session-terminated")
+			event.ctx.Client.Handle(Event{SID: event.SID,
+				Tag:    event.Tag,
+				Name:   event.Name,
+				Res:    event.Res,
+				Remark: &Remark{Level: "fatal", Slug: e.Slug(), Data: map[string]string{"err-code": strconv.Itoa(int(e))}},
+			})
+		}
+	} else {
+		event.ctx.LogError(fmt.Errorf("error retrieving session `%s`: %s", event.SID, err))
+	}
+}
+
+func (hub *SessionHub) toSession(event Event) error {
 	// if session has an active runner, get its inbox
-	inbox, ok := hub.active[sid]
+	inbox, ok := hub.active[event.SID]
 	if !ok {
 		// no active runner found
 		// fetch session from sessionstore
 		inbox = make(chan Event, 32)
-		session, err := hub.backend.Get(sid)
+		session, err := hub.backend.Get(event.SID)
 		if err != nil {
+			go hub.handleInvalidSession(err, event)
 			return err
 		}
 		// spin up runner for session
 		hub.wg.Add(1)
 		go checkInbox(inbox, session, hub)
-		hub.active[sid] = inbox
+		hub.active[event.SID] = inbox
 	}
 	inbox <- event
 	return nil
