@@ -275,7 +275,18 @@ func (tok *TokenConsumer) GetUID(sid string) (string, error) {
 
 func (tok *TokenConsumer) markConsumed(token Token) (err error) {
 	_, err = tok.db.Exec("UPDATE tokens SET times_consumed = times_consumed+1, last_consumed_at=now() WHERE token = $1", token.Key)
-	return
+	token.TimesConsumed++
+	if token.Kind == "share-url" && token.Exhausted() {
+		// re-create token
+		plain, hashed := generateToken()
+		if _, err = tok.db.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES ($1, 'share-url', '', $2)", hashed, token.NID); err != nil {
+			return err
+		}
+		if _, err = tok.db.Exec("UPDATE notes SET sharing_token = $1 WHERE nid = $2", plain, token.NID); err != nil {
+			return err
+		}
+	}
+	return err
 }
 
 func (tok *TokenConsumer) getToken(plain string) (Token, error) {
