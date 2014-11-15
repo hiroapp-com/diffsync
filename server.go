@@ -21,7 +21,7 @@ func NewServer(db *sql.DB, handler comm.Handler) (*Server, error) {
 	srv.Store = NewStore(handler)
 	srv.sessionBackend = NewSQLSessions(db)
 	srv.sessionHub = NewSessionHub(srv.sessionBackend)
-	srv.tokenConsumer = NewTokenConsumer(srv.sessionBackend, srv.sessionHub, db)
+	srv.tokenConsumer = NewTokenConsumer(srv.sessionBackend, db)
 	return srv, nil
 }
 

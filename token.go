@@ -54,12 +54,11 @@ func (t Token) Exhausted() bool {
 
 type TokenConsumer struct {
 	db       *sql.DB
-	hub      *SessionHub
 	sessions SessionBackend
 }
 
-func NewTokenConsumer(backend SessionBackend, hub *SessionHub, db *sql.DB) *TokenConsumer {
-	return &TokenConsumer{db, hub, backend}
+func NewTokenConsumer(backend SessionBackend, db *sql.DB) *TokenConsumer {
+	return &TokenConsumer{db, backend}
 }
 
 func (tok *TokenConsumer) Handle(event Event, next EventHandler) error {
@@ -240,10 +239,9 @@ func (tok *TokenConsumer) createSession(token Token, ctx Context) (*Session, err
 
 func (tok *TokenConsumer) consumeToken(token Token, ctx Context) (*Session, error) {
 	if !strings.HasPrefix(token.Kind, "share") {
-		return nil, errors.New("cannot consume non-sharing token" + token.Kind)
+		return nil, errors.New("cannot `token-consume` non-sharing token" + token.Kind)
 	}
-	log.Printf("loading session (%s) from hub", ctx.sid)
-	session, err := tok.hub.Snapshot(ctx.sid, ctx)
+	session, err := tok.snapshotSession(ctx.sid, ctx)
 	if err != nil {
 		// todo check if session has expired or anyhing
 		// maybe we want to proceed normaly with token
@@ -271,6 +269,31 @@ func (tok *TokenConsumer) consumeToken(token Token, ctx Context) (*Session, erro
 
 func (tok *TokenConsumer) GetUID(sid string) (string, error) {
 	return tok.sessions.GetUID(sid)
+}
+
+func (tok *TokenConsumer) snapshotSession(sid string, ctx Context) (*Session, error) {
+	resp := make(chan Event, 1)
+	ctx.Client = FuncHandler{func(event Event) error {
+		resp <- event
+		return nil
+	}}
+	if err := ctx.Router.Handle(Event{Name: "snapshot", SID: sid, ctx: ctx}); err != nil {
+		return nil, err
+	}
+	select {
+	case event := <-resp:
+		//response!
+		if event.Remark != nil {
+			eid, _ := strconv.Atoi(event.Remark.Data["err-code"])
+			return nil, ErrInvalidSession(eid)
+		}
+		return event.Session, nil
+	case <-time.After(5 * time.Second):
+		// request timed out. we'll ignore the old session alltogether
+		// TBD should we fail hard here, so old anon session data never gets lost (because client will retry)?
+		log.Printf("token: could not fetch session data for `%s`. request to hub timed out. ignoring old sessiondata and continue. ", sid)
+		return nil, ResponseTimeoutErr{sid}
+	}
 }
 
 func (tok *TokenConsumer) markConsumed(token Token) (err error) {

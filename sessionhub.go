@@ -82,31 +82,6 @@ func (hub *SessionHub) Handle(event Event) error {
 	return fmt.Errorf("no route matched, event could not be routed/delivered: %s", event)
 }
 
-func (hub *SessionHub) Snapshot(sid string, ctx Context) (*Session, error) {
-	resp := make(chan Event, 1)
-	ctx.Client = FuncHandler{func(event Event) error {
-		resp <- event
-		return nil
-	}}
-	if err := hub.Handle(Event{Name: "snapshot", SID: sid, ctx: ctx}); err != nil {
-		return nil, err
-	}
-	select {
-	case event := <-resp:
-		//response!
-		if event.Remark != nil {
-			eid, _ := strconv.Atoi(event.Remark.Data["err-code"])
-			return nil, ErrInvalidSession(eid)
-		}
-		return event.Session, nil
-	case <-time.After(5 * time.Second):
-		// request timed out. we'll ignore the old session alltogether
-		// TBD should we fail hard here, so old anon session data never gets lost (because client will retry)?
-		log.Printf("token: could not fetch session data for `%s`. request to hub timed out. ignoring old sessiondata and continue. ", sid)
-		return nil, ResponseTimeoutErr{sid}
-	}
-}
-
 func (hub *SessionHub) Run() {
 	// spawn the hubrunner
 	log.Println("sessionhub: entering main loop")

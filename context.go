@@ -38,6 +38,10 @@ func (c Context) User() User {
 	return r.Value.(Profile).User
 }
 
+func (c Context) Clone() Context {
+	return c
+}
+
 func (c Context) LogError(err error) {
 	log.Println("ERROR", err, personFromUser(c.User()))
 	rollbar.Error(rollbar.ERR, err, personFromUser(c.User()))
