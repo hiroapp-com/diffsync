@@ -237,7 +237,7 @@ func (backend ProfileSQLBackend) sendVerifyToken(uid string, rcpt comm.Rcpt, sto
 		// unsupported address kind, cannot create token
 		return
 	}
-	token, hashed := generateToken()
+	token, hashed := GenerateToken()
 	// WARNING: we're injecting a string into SQL without any escaping.
 	//          we need to assure that addrKind is a valid value (see switch above)
 	_, err := backend.db.Exec(fmt.Sprintf("INSERT INTO tokens (token, kind, uid, %s) VALUES ($1, 'verify', $2, $3)", addrKind), hashed, uid, addr)

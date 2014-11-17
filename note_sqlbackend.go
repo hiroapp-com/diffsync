@@ -208,7 +208,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 func (backend NoteSQLBackend) CreateEmpty(ctx Context) (string, error) {
 	note := NewNote("")
 	nid := generateNID()
-	token, hashed := generateToken()
+	token, hashed := GenerateToken()
 	_, err := backend.db.Exec("INSERT INTO notes (nid, title, txt, sharing_token, created_by) VALUES ($1, $2, $3, $4, $5)", nid, note.Title, string(note.Text), token, ctx.uid)
 	if err != nil {
 		return "", err
@@ -262,7 +262,7 @@ func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx Context) (e
 }
 
 func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
-	token, hashed := generateToken()
+	token, hashed := GenerateToken()
 	reqData := map[string]interface{}{"token": token, "nid": nid}
 	// get info from inviter
 	res := Resource{Kind: "profile", ID: ctx.uid}

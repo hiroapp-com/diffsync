@@ -301,7 +301,7 @@ func (tok *TokenConsumer) markConsumed(token Token) (err error) {
 	token.TimesConsumed++
 	if token.Kind == "share-url" && token.Exhausted() {
 		// re-create token
-		plain, hashed := generateToken()
+		plain, hashed := GenerateToken()
 		if _, err = tok.db.Exec("INSERT INTO tokens (token, kind, uid, nid) VALUES ($1, 'share-url', '', $2)", hashed, token.NID); err != nil {
 			return err
 		}
@@ -489,7 +489,7 @@ func (tok *TokenConsumer) addNoteRef(uid, nid string, ctx Context) error {
 	return nil
 }
 
-func generateToken() (string, string) {
+func GenerateToken() (string, string) {
 	uuid := make([]byte, 16)
 	if n, err := rand.Read(uuid); err != nil || n != len(uuid) {
 		panic(err)

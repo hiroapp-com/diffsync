@@ -48,7 +48,7 @@ func (srv *Server) Token(kind string) (string, error) {
 	return "", errors.New("unknown tokenkind")
 }
 func (srv *Server) anonToken() (string, error) {
-	token, hashed := generateToken()
+	token, hashed := GenerateToken()
 	_, err := srv.db.Exec("INSERT INTO tokens (token, kind) VALUES ($1, 'anon')", hashed)
 	if err != nil {
 		return "", err
@@ -57,7 +57,7 @@ func (srv *Server) anonToken() (string, error) {
 }
 
 func (srv *Server) loginToken(uid string) (string, error) {
-	token, hashed := generateToken()
+	token, hashed := GenerateToken()
 	_, err := srv.db.Exec("INSERT INTO tokens (token, kind, uid) VALUES ($1, 'login', $2)", hashed, uid)
 	if err != nil {
 		return "", err
