@@ -18,10 +18,11 @@ import (
 var tokenLifeTimes = map[string]time.Duration{
 	"anon": 5 * time.Minute,
 	//"login":     5 * 24 * time.Hour,
-	"login":     2 * 7 * 24 * time.Hour,    //2 weeks for now, so that sent-out login tokens to alpha users live a little longer
-	"verify":    2 * 7 * 24 * time.Hour,    //2 weeks
-	"share-url": 3 * 30.5 * 24 * time.Hour, //3 months
-	"share":     1 * 30.5 * 24 * time.Hour, //1 month
+	"login":          2 * 7 * 24 * time.Hour,    //2 weeks for now, so that sent-out login tokens to alpha users live a little longer
+	"login-campaign": 2 * 7 * 24 * time.Hour,    //2 weeks for now
+	"verify":         2 * 7 * 24 * time.Hour,    //2 weeks
+	"share-url":      3 * 30.5 * 24 * time.Hour, //3 months
+	"share":          1 * 30.5 * 24 * time.Hour, //1 month
 }
 
 type Token struct {
@@ -180,7 +181,7 @@ func (tok *TokenConsumer) createSession(token Token, ctx Context) (*Session, err
 		}
 		ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "profile", ID: u.UID}, ctx: ctx})
 		ctx.Router.Handle(Event{Name: "res-sync", Res: Resource{Kind: "folio", ID: u.UID}, ctx: ctx})
-	case "login":
+	case "login", "login-campaign":
 		// login token
 		// load token's user
 		profile = Resource{Kind: "profile", ID: token.UID}
