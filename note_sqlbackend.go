@@ -262,7 +262,6 @@ func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx Context) (e
 }
 
 func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
-	rcpt := preferredRcpt(user)
 	token, hashed := generateToken()
 	reqData := map[string]string{"token": token, "nid": nid}
 	// get info from inviter
@@ -276,7 +275,7 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 	reqData["inviter_phone"] = inviter.Phone
 	// store hashed token and recipient-address
 	var err error
-	switch addr, addrKind := rcpt.Addr(); addrKind {
+	switch addr, addrKind := user.Addr(); addrKind {
 	case "phone":
 		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, phone) VALUES ($1, 'share', $2, $3, $4)", hashed, user.UID, nid, addr)
 	case "email":
@@ -308,7 +307,7 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 	reqData["title"] = note.Title
 	reqData["num_peers"] = strconv.Itoa(len(note.Peers))
 	reqData["invitee_tier"] = strconv.Itoa(int(user.Tier))
-	req := comm.NewRequest("invite", rcpt, reqData)
+	req := comm.NewRequest("invite", user, reqData)
 	if err = ctx.store.commHandler(req); err != nil {
 		log.Printf("error: sendInvite could not forward request to comm.Handler; err: %v", err)
 	}

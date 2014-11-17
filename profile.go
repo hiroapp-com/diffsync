@@ -36,7 +36,6 @@ type Profile struct {
 
 type emailRcpt User
 type phoneRcpt User
-type preferredRcpt User
 
 func (rcpt emailRcpt) Addr() (string, string) {
 	return User(rcpt).Email, "email"
@@ -53,8 +52,7 @@ func (rcpt phoneRcpt) DisplayName() string {
 	return User(rcpt).Name
 }
 
-func (rcpt preferredRcpt) Addr() (string, string) {
-	u := User(rcpt)
+func (u User) Addr() (string, string) {
 	switch {
 	case u.Phone != "" && u.PhoneStatus != "unverified":
 		// verified or invited phone has preference over all
@@ -75,8 +73,8 @@ func (rcpt preferredRcpt) Addr() (string, string) {
 	}
 }
 
-func (rcpt preferredRcpt) DisplayName() string {
-	return User(rcpt).Name
+func (u User) DisplayName() string {
+	return u.Name
 }
 
 func NewProfile() Profile {
