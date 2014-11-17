@@ -245,7 +245,7 @@ func (backend ProfileSQLBackend) sendVerifyToken(uid string, rcpt comm.Rcpt, sto
 		// could not create token oO
 		return
 	}
-	err = store.commHandler(comm.NewRequest("verify", rcpt, map[string]string{
+	err = store.commHandler(comm.NewRequest("verify", rcpt, map[string]interface{}{
 		"token": token,
 	}))
 	if err != nil {

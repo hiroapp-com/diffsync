@@ -263,7 +263,7 @@ func (backend NoteSQLBackend) pokeTimers(id string, edited bool, ctx Context) (e
 
 func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 	token, hashed := generateToken()
-	reqData := map[string]string{"token": token, "nid": nid}
+	reqData := map[string]interface{}{"token": token, "nid": nid}
 	// get info from inviter
 	res := Resource{Kind: "profile", ID: ctx.uid}
 	if err := ctx.store.Load(&res); err != nil {
@@ -305,7 +305,7 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 		reqData["peek"] = txt
 	}
 	reqData["title"] = note.Title
-	reqData["num_peers"] = strconv.Itoa(len(note.Peers))
+	reqData["num_peers"] = len(note.Peers)
 	reqData["invitee_tier"] = strconv.Itoa(int(user.Tier))
 	req := comm.NewRequest("invite", user, reqData)
 	if err = ctx.store.commHandler(req); err != nil {
