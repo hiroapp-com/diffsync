@@ -8,3 +8,4 @@ CREATE TABLE "note_changelog" (
     txt_snapshot text default '',
     ts timestamptz default now()
 );
+insert into note_changelog (nid, op, delta, txt_snapshot) select nid, 'patch-text', concat('=', length(txt)), txt from notes;
