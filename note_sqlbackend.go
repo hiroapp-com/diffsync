@@ -5,15 +5,19 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"database/sql"
+	"math/rand"
 
 	"bitbucket.org/sushimako/hync/comm"
+	"github.com/lib/pq"
 	DMP "github.com/sergi/go-diff/diffmatchpatch"
 )
 
 var (
-	_ = log.Print
+	_   = log.Print
+	rnd *rand.Rand
 )
 
 type NoteSQLBackend struct {
@@ -71,7 +75,7 @@ func (backend NoteSQLBackend) Patch(nid string, patch Patch, result *SyncResult,
 		// patch.Path empty
 		// patch.Value contains text-patches
 		// patch.OldValue empty
-		err := backend.patchText(nid, patch.Value.([]DMP.Patch), result)
+		err := backend.patchText(nid, patch.Value.([]DMP.Patch), result, ctx)
 		if err != nil {
 			return fmt.Errorf("notesqlbackend: note(%s) could not be patched. patch: `%v`, err: `%s`", nid, patch.Value, err)
 		}
@@ -226,9 +230,13 @@ func (backend NoteSQLBackend) CreateEmpty(ctx Context) (string, error) {
 	return nid, nil
 }
 
-func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch, result *SyncResult) error {
+func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch, result *SyncResult, ctx Context) error {
+BeginTransaction:
 	txn, err := backend.db.Begin()
 	if err != nil {
+		return err
+	}
+	if _, err := txn.Exec("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"); err != nil {
 		return err
 	}
 	var original string
@@ -241,14 +249,34 @@ func (backend NoteSQLBackend) patchText(id string, patch []DMP.Patch, result *Sy
 		return err
 	}
 	patched, _ := dmp.PatchApply(patch, original)
-	if _, err := txn.Exec("UPDATE notes SET txt = $1 WHERE nid = $2", patched, id); err != nil {
+	if patched == original {
 		txn.Rollback()
+		return nil
+	}
+	// update text in database
+	if _, err = txn.Exec("UPDATE notes SET txt = $1 WHERE nid = $2", patched, id); err != nil {
+		txn.Rollback()
+		if pqerr, ok := err.(*pq.Error); ok && pqerr.Code == "40001" {
+			// transaction failed b/c of writes in concurrent transaction, retry
+			goto BeginTransaction
+		}
+		return err
+	}
+	// save changes to changelog
+	delta := string(TextValue(original).GetDelta(TextValue(patched)).(TextDelta))
+	if !wantSnapshot() {
+		patched = ""
+	}
+	if _, err = txn.Exec("INSERT INTO note_changelog (nid, uid, op, delta, txt_snapshot, ts) VALUES ($1, $2, 'patch-text', $3, $4, now())", id, ctx.uid, delta, patched); err != nil {
+		txn.Rollback()
+		if pqerr, ok := err.(*pq.Error); ok && pqerr.Code == "40001" {
+			// transaction failed b/c of writes in concurrent transaction, retry
+			goto BeginTransaction
+		}
 		return err
 	}
 	txn.Commit()
-	if original != patched {
-		result.Tainted(Resource{Kind: "note", ID: id})
-	}
+	result.Tainted(Resource{Kind: "note", ID: id})
 	return nil
 }
 
@@ -315,4 +343,13 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 
 func generateNID() string {
 	return randomString(10)
+}
+
+func wantSnapshot() bool {
+	return rnd.Int31() < 1<<24 // 0.0078125 probability of a snapshot
+}
+
+func init() {
+	// initialize random number generator
+	rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
 }
