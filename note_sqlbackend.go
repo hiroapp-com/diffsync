@@ -296,6 +296,7 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 	res := Resource{Kind: "profile", ID: ctx.uid}
 	if err := ctx.store.Load(&res); err != nil {
 		log.Printf("error: sendInvite could not fetch profile info of inviter; err: %v", err)
+		return
 	}
 	inviter := res.Value.(Profile).User
 	reqData["inviter_name"] = inviter.Name
@@ -303,11 +304,9 @@ func (backend NoteSQLBackend) sendInvite(user User, nid string, ctx Context) {
 	reqData["inviter_phone"] = inviter.Phone
 	// store hashed token and recipient-address
 	var err error
-	switch addr, addrKind := user.Addr(); addrKind {
-	case "phone":
-		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, phone) VALUES ($1, 'share', $2, $3, $4)", hashed, user.UID, nid, addr)
-	case "email":
-		_, err = backend.db.Exec("INSERT INTO tokens (token, kind, uid, nid, email) VALUES ($1, 'share', $2, $3, $4)", hashed, user.UID, nid, addr)
+	switch addr, aKind := user.Addr(); aKind {
+	case "email", "phone":
+		_, err = backend.db.Exec(fmt.Sprintf("INSERT INTO tokens (token, kind, uid, nid, %s, created_by) VALUES ($1, 'share', $2, $3, $4, $5)", aKind), hashed, user.UID, nid, addr, ctx.uid)
 	default:
 		log.Printf("warn: cannot invite user[%s]. no usable contanct-addr found", user.UID)
 		return

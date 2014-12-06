@@ -34,6 +34,7 @@ type Token struct {
 	Phone         string
 	ValidFrom     *time.Time
 	TimesConsumed int64
+	CreatedBy     string
 }
 
 func (t Token) Expired() bool {
@@ -318,7 +319,7 @@ func (tok *TokenConsumer) getToken(plain string) (Token, error) {
 	io.WriteString(h, plain)
 	hashed := hex.EncodeToString(h.Sum(nil))
 	t := Token{}
-	err := tok.db.QueryRow("SELECT token, kind, uid, nid, email, phone, valid_from, times_consumed FROM tokens where token = $1", hashed).Scan(&t.Key, &t.Kind, &t.UID, &t.NID, &t.Email, &t.Phone, &t.ValidFrom, &t.TimesConsumed)
+	err := tok.db.QueryRow("SELECT token, kind, uid, nid, email, phone, valid_from, times_consumed, created_by FROM tokens where token = $1", hashed).Scan(&t.Key, &t.Kind, &t.UID, &t.NID, &t.Email, &t.Phone, &t.ValidFrom, &t.TimesConsumed, &t.CreatedBy)
 	if err == sql.ErrNoRows {
 		return Token{}, Remark{Level: "error", Slug: "token-noexist-or-invalid"}
 	} else if err != nil {
