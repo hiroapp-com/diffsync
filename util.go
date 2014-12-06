@@ -3,6 +3,7 @@ package diffsync
 import (
 	"crypto/rand"
 	mrand "math/rand"
+	"strings"
 	"time"
 )
 
@@ -34,6 +35,16 @@ func randomString(length int) string {
 		bytes[i] = src[mrand.Int63n(n)]
 	}
 	return string(bytes)
+}
+
+func peek(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	if i := strings.LastIndex(s[:limit], " "); i > 0 {
+		return s[:i] + " ..."
+	}
+	return s[:limit-3] + "..."
 }
 
 func init() {
