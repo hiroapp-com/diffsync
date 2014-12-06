@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"bitbucket.org/sushimako/hync/comm"
+
 	"database/sql"
 )
 
@@ -165,6 +167,10 @@ func (tok *TokenConsumer) createSession(token Token, ctx Context) (*Session, err
 		if err = tok.addNoteRef(token.UID, token.NID, ctx); err != nil {
 			return nil, err
 		}
+		if token.CreatedBy != "" {
+			// notify inviter
+			go tok.notifyInviter(token.CreatedBy, token.NID, u, ctx)
+		}
 	case "verify":
 		profile = Resource{Kind: "profile", ID: token.UID}
 		if err = store.Load(&profile); err != nil {
@@ -243,6 +249,10 @@ func (tok *TokenConsumer) consumeToken(token Token, ctx Context) (*Session, erro
 	if !strings.HasPrefix(token.Kind, "share") {
 		return nil, errors.New("cannot `token-consume` non-sharing token" + token.Kind)
 	}
+	// TODO move validation (e.g. Kind == share && nid == "" > err) to getToken(..)
+	if token.NID == "" {
+		return nil, errors.New("nid missing in sharing token")
+	}
 	session, err := tok.snapshotSession(ctx.sid, ctx)
 	if err != nil {
 		// todo check if session has expired or anyhing
@@ -250,18 +260,18 @@ func (tok *TokenConsumer) consumeToken(token Token, ctx Context) (*Session, erro
 		// even if provided session is dead for some reason
 		return nil, err
 	}
-	if token.NID != "" {
-		// check if consuming session already has token.NID note
-		for i := range session.shadows {
-			if session.shadows[i].res.SameRef(Resource{Kind: "note", ID: token.NID}) {
-				// already in consuming session's folio. don't re-add and dont
-				// consume token
-				return session, nil
-			}
-		}
-		if err = tok.addNoteRef(session.uid, token.NID, ctx); err != nil {
-			return nil, err
-		}
+	// notify inviter that invitation has been accepted
+	ctx.uid = session.uid
+	if token.CreatedBy != "" {
+		go tok.notifyInviter(token.CreatedBy, token.NID, ctx.User(), ctx)
+	}
+	if session.hasShadow(Resource{Kind: "note", ID: token.NID}) {
+		// already in consuming session's folio. don't re-add and dont
+		// consume token
+		return session, nil
+	}
+	if err = tok.addNoteRef(session.uid, token.NID, ctx); err != nil {
+		return nil, err
 	}
 	if err = tok.markConsumed(token); err != nil {
 		return nil, err
@@ -295,6 +305,45 @@ func (tok *TokenConsumer) snapshotSession(sid string, ctx Context) (*Session, er
 		// TBD should we fail hard here, so old anon session data never gets lost (because client will retry)?
 		log.Printf("token: could not fetch session data for `%s`. request to hub timed out. ignoring old sessiondata and continue. ", sid)
 		return nil, ResponseTimeoutErr{sid}
+	}
+}
+
+func (tok *TokenConsumer) notifyInviter(uid, nid string, peer User, ctx Context) {
+	// create login token
+	token, hashed := GenerateToken()
+	if _, err := tok.db.Exec("INSERT INTO tokens (token, kind, uid) VALUES ($1, 'login', $2)", hashed, uid); err != nil {
+		log.Printf("error: notifyInviter failed to create logintoken; err: %v", err)
+		return
+	}
+	// collect info about the shared note
+	res := Resource{Kind: "note", ID: nid}
+	if err := ctx.store.Load(&res); err != nil {
+		log.Printf("error: sendInvite could not fetch note info of shared note; err: %v", err)
+		return
+	}
+	note := res.Value.(Note)
+	data := map[string]interface{}{
+		"token": token,
+		"note": map[string]interface{}{
+			"id":        nid,
+			"title":     note.Title,
+			"peek":      peek(string(note.Text), 500),
+			"num_peers": len(note.Peers),
+		},
+		"peer": map[string]string{
+			"name":  peer.Name,
+			"email": peer.Email,
+			"phone": peer.Phone,
+		},
+	}
+	res = Resource{Kind: "profile", ID: uid}
+	if err := ctx.store.Load(&res); err != nil {
+		log.Printf("error: notifyInviter could not fetch profile info of inviter; err: %v", err)
+		return
+	}
+	req := comm.NewRequest("invite-accepted", res.Value.(Profile).User, data)
+	if err := ctx.store.commHandler(req); err != nil {
+		log.Printf("error: sendInvite could not forward request to comm.Handler; err: %v", err)
 	}
 }
 
