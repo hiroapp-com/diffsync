@@ -325,7 +325,7 @@ func (tok *TokenConsumer) notifyInviter(uid, nid string, peer User, ctx Context)
 	data := map[string]interface{}{
 		"token": token,
 		"note": map[string]interface{}{
-			"id":        nid,
+			"nid":       nid,
 			"title":     note.Title,
 			"peek":      peek(string(note.Text), 500),
 			"num_peers": len(note.Peers),
