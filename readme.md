@@ -1,0 +1,1 @@
+- Add your rollbar key as ROLLBAR_TOKEN
