@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"bitbucket.org/sushimako/hync/comm"
+	"github.com/hiroapp-com/hync/comm"
 
 	"database/sql"
 )

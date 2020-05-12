@@ -10,7 +10,7 @@ import (
 	"database/sql"
 	"math/rand"
 
-	"bitbucket.org/sushimako/hync/comm"
+	"github.com/hiroapp-com/hync/comm"
 	"github.com/lib/pq"
 	DMP "github.com/sergi/go-diff/diffmatchpatch"
 )
